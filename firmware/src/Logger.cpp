@@ -1,4 +1,5 @@
 #include "Logger.h"
+#include "EventLog.h"
 
  
 
@@ -149,45 +150,43 @@ void Logger::errorf(const char *format, ...)
  
 
 void Logger::write(
-
     LogLevel level,
-
-    const String &message)
-
+    const String& message)
 {
-
     if (
-
         currentLevel == LogLevel::None ||
-
         static_cast<uint8_t>(level) <
-
             static_cast<uint8_t>(currentLevel))
-
     {
-
         return;
-
     }
 
- 
+    writeSerial(
+        level,
+        message);
 
-    const unsigned long seconds = millis() / 1000UL;
+    switch (level)
+    {
+        case LogLevel::Warning:
+            eventLog.add(
+                EventLevel::Warning,
+                message);
+            break;
 
- 
+        case LogLevel::Error:
+            eventLog.add(
+                EventLevel::Error,
+                message);
+            break;
 
-    Serial.print("[");
-
-    Serial.print(seconds);
-
-    Serial.print("s] [");
-
-    Serial.print(levelName(level));
-
-    Serial.print("] ");
-
-    Serial.println(message);
-
+        case LogLevel::Debug:
+        case LogLevel::Info:
+        default:
+            eventLog.add(
+                EventLevel::Info,
+                message);
+            break;
+    }
 }
 
  
@@ -266,4 +265,56 @@ const char *Logger::levelName(LogLevel level) const
 
     return "UNKNOWN";
 
+}
+void Logger::telemetry(
+    const String& message)
+{
+    writeSerial(
+        LogLevel::Info,
+        message);
+}
+
+void Logger::telemetryf(
+    const char* format,
+    ...)
+{
+    char buffer[192];
+
+    va_list arguments;
+    va_start(arguments, format);
+
+    vsnprintf(
+        buffer,
+        sizeof(buffer),
+        format,
+        arguments);
+
+    va_end(arguments);
+
+    writeSerial(
+        LogLevel::Info,
+        String(buffer));
+}
+
+void Logger::writeSerial(
+    LogLevel level,
+    const String& message)
+{
+    if (
+        currentLevel == LogLevel::None ||
+        static_cast<uint8_t>(level) <
+            static_cast<uint8_t>(currentLevel))
+    {
+        return;
+    }
+
+    const unsigned long seconds =
+        millis() / 1000UL;
+
+    Serial.print("[");
+    Serial.print(seconds);
+    Serial.print("s] [");
+    Serial.print(levelName(level));
+    Serial.print("] ");
+    Serial.println(message);
 }

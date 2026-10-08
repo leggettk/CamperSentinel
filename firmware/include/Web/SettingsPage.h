@@ -28,6 +28,12 @@ public:
 
     void handleDevice();
     void handleDeviceSave();
+
+    void handleConnectivity();
+    void handleConnectivitySave();
+
+    void handleMqttSave();
+
     String formatUptime (uint32_t totalSeconds) const;
 private:
 

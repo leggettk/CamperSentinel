@@ -74,7 +74,8 @@ public:
         float maximum,
         float step,
         const String& unit = "",
-        const String& description = "");
+        const String& description = "",
+        uint8_t decimals = 1);
 
     void addCheckbox(
         const String& label,
@@ -96,7 +97,15 @@ public:
     const String& value,
     size_t maxLength,
     const String& description = "");
-
+    void addPasswordInput(
+    const String& label,
+    const String& name,
+    size_t maxLength,
+    const String& description = "");
+    void addActionButton(
+    const String& label,
+    const String& action,
+    bool danger = false);
 private:
     String html_;
 
@@ -105,6 +114,7 @@ private:
     bool footerAdded_ = false;
     bool formOpen_ = false;
     void appendStyles();
+    
     
     String escapeHtml(const String& value) const;
     String statusClass(StatusLevel level) const;

@@ -33,18 +33,43 @@ bool Settings::load()
     const uint16_t storedVersion =
         preferences_.getUShort("version", 0);
 
-    // New device or incompatible settings version.
-    if (storedVersion == 0 ||
-        storedVersion != DeviceSettings::CURRENT_VERSION)
+    //
+    // Brand-new device
+    //
+    if (storedVersion == 0)
     {
         data_ = DeviceSettings{};
 
-        data_.wifiSSID = DEFAULT_WIFI_SSID;
-        data_.wifiPassword = DEFAULT_WIFI_PASSWORD;
+        data_.wifiSSID =
+            DEFAULT_WIFI_SSID;
+
+        data_.wifiPassword =
+            DEFAULT_WIFI_PASSWORD;
+
+        //
+        // Development/default MQTT settings.
+        //
+        data_.mqttHost =
+            MQTT_HOST;
+
+        data_.mqttPort =
+            MQTT_PORT;
+
+        data_.mqttUsername =
+            MQTT_USER;
+
+        data_.mqttPassword =
+            MQTT_PASSWORD;
+
+        data_.mqttEnabled = true;
+        data_.mqttTlsEnabled = true;
 
         return save();
     }
 
+    //
+    // Load settings shared by v1 and v2.
+    //
     data_.version = storedVersion;
 
     data_.deviceName =
@@ -62,7 +87,6 @@ bool Settings::load()
             "wifiEnabled",
             true);
 
-    // Avoid calling getString() for missing Wi-Fi keys.
     if (preferences_.isKey("wifiSSID"))
     {
         data_.wifiSSID =
@@ -93,35 +117,131 @@ bool Settings::load()
     data_.tempAlarmHighF =
         preferences_.getFloat(
             "tempHighF",
-            90.0f);
+            DEFAULT_TEMP_ALARM_HIGH_F);
 
     data_.tempAlarmResetF =
         preferences_.getFloat(
             "tempResetF",
-            85.0f);
+            DEFAULT_TEMP_ALARM_RESET_F);
 
     data_.heartbeatIntervalSeconds =
         preferences_.getULong(
             "heartbeatSec",
-            300);
+            DEFAULT_HEARTBEAT_INTERVAL_SECONDS);
 
     data_.temperaturePublishIntervalSeconds =
         preferences_.getULong(
             "tempPubSec",
-            180);
+            DEFAULT_TEMPERATURE_PUBLISH_SECONDS);
 
     bool needsSave = false;
 
-    // Save Wi-Fi defaults when their keys were missing.
+    //
+    // MQTT settings introduced in version 2.
+    //
+    if (storedVersion < 2)
+    {
+        data_.mqttEnabled = true;
+
+        data_.mqttHost =
+            MQTT_HOST;
+
+        data_.mqttPort =
+            MQTT_PORT;
+
+        data_.mqttUsername =
+            MQTT_USER;
+
+        data_.mqttPassword =
+            MQTT_PASSWORD;
+
+        data_.mqttTlsEnabled = true;
+
+        needsSave = true;
+    }
+    else
+    {
+        data_.mqttEnabled =
+            preferences_.getBool(
+                "mqttEnabled",
+                true);
+
+        if (preferences_.isKey("mqttHost"))
+        {
+            data_.mqttHost =
+                preferences_.getString("mqttHost");
+        }
+        else
+        {
+            data_.mqttHost =
+                MQTT_HOST;
+
+            needsSave = true;
+        }
+
+        data_.mqttPort =
+            preferences_.getUShort(
+                "mqttPort",
+                MQTT_PORT);
+
+        if (preferences_.isKey("mqttUser"))
+        {
+            data_.mqttUsername =
+                preferences_.getString("mqttUser");
+        }
+        else
+        {
+            data_.mqttUsername =
+                MQTT_USER;
+
+            needsSave = true;
+        }
+
+        if (preferences_.isKey("mqttPass"))
+        {
+            data_.mqttPassword =
+                preferences_.getString("mqttPass");
+        }
+        else
+        {
+            data_.mqttPassword =
+                MQTT_PASSWORD;
+
+            needsSave = true;
+        }
+
+        data_.mqttTlsEnabled =
+            preferences_.getBool(
+                "mqttTls",
+                true);
+    }
+
+    //
+    // Missing Wi-Fi keys should also be persisted.
+    //
     if (!preferences_.isKey("wifiSSID") ||
         !preferences_.isKey("wifiPass"))
     {
         needsSave = true;
     }
 
+    //
     // Correct invalid values.
+    //
     if (!validate())
     {
+        needsSave = true;
+    }
+
+    //
+    // Upgrade persisted version.
+    //
+    if (storedVersion !=
+        DeviceSettings::CURRENT_VERSION)
+    {
+        data_.version =
+            DeviceSettings::CURRENT_VERSION;
+
         needsSave = true;
     }
 
@@ -157,32 +277,86 @@ bool Settings::save()
         "hostname",
         data_.hostname) > 0;
 
+    //
+    // Wi-Fi
+    //
     success &= preferences_.putBool(
         "wifiEnabled",
         data_.wifiEnabled) > 0;
 
-if (data_.wifiSSID.isEmpty())
-{
-    preferences_.remove("wifiSSID");
-}
-else
-{
-    success &= preferences_.putString(
-        "wifiSSID",
-        data_.wifiSSID) > 0;
-}
+    if (data_.wifiSSID.isEmpty())
+    {
+        preferences_.remove("wifiSSID");
+    }
+    else
+    {
+        success &= preferences_.putString(
+            "wifiSSID",
+            data_.wifiSSID) > 0;
+    }
 
-if (data_.wifiPassword.isEmpty())
-{
-    preferences_.remove("wifiPass");
-}
-else
-{
-    success &= preferences_.putString(
-        "wifiPass",
-        data_.wifiPassword) > 0;
-}
+    if (data_.wifiPassword.isEmpty())
+    {
+        preferences_.remove("wifiPass");
+    }
+    else
+    {
+        success &= preferences_.putString(
+            "wifiPass",
+            data_.wifiPassword) > 0;
+    }
 
+    //
+    // MQTT
+    //
+    success &= preferences_.putBool(
+        "mqttEnabled",
+        data_.mqttEnabled) > 0;
+
+    if (data_.mqttHost.isEmpty())
+    {
+        preferences_.remove("mqttHost");
+    }
+    else
+    {
+        success &= preferences_.putString(
+            "mqttHost",
+            data_.mqttHost) > 0;
+    }
+
+    success &= preferences_.putUShort(
+        "mqttPort",
+        data_.mqttPort) > 0;
+
+    if (data_.mqttUsername.isEmpty())
+    {
+        preferences_.remove("mqttUser");
+    }
+    else
+    {
+        success &= preferences_.putString(
+            "mqttUser",
+            data_.mqttUsername) > 0;
+    }
+
+    if (data_.mqttPassword.isEmpty())
+    {
+        preferences_.remove("mqttPass");
+    }
+    else
+    {
+        success &= preferences_.putString(
+            "mqttPass",
+            data_.mqttPassword) > 0;
+    }
+
+    success &= preferences_.putBool(
+        "mqttTls",
+        data_.mqttTlsEnabled) > 0;
+
+    //
+    // Alerts
+    //
     success &= preferences_.putBool(
         "smsEnabled",
         data_.smsEnabled) > 0;
@@ -195,6 +369,9 @@ else
         "tempResetF",
         data_.tempAlarmResetF) > 0;
 
+    //
+    // Reporting
+    //
     success &= preferences_.putULong(
         "heartbeatSec",
         data_.heartbeatIntervalSeconds) > 0;
@@ -305,6 +482,13 @@ bool Settings::validate()
         data_.temperaturePublishIntervalSeconds = 180;
         alreadyValid = false;
     }
+    if (data_.mqttPort == 0)
+    {
+        data_.mqttPort = 8883;
+        alreadyValid = false;
+    }
 
+    data_.mqttHost.trim();
+    data_.mqttUsername.trim();
     return alreadyValid;
 }

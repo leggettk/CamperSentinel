@@ -669,6 +669,43 @@ void WebPageBuilder::appendStyles()
             padding: 17px;
         }
     }
+    .action-form {
+    margin: 16px 0 0;
+}
+
+.action-button {
+    display: block;
+    width: 100%;
+    padding: 14px 18px;
+
+    color: #ffffff;
+    background: var(--accent);
+
+    border: none;
+    border-radius: 10px;
+
+    font: inherit;
+    font-size: 1rem;
+    font-weight: 750;
+
+    cursor: pointer;
+
+    transition:
+        filter 0.15s ease,
+        transform 0.15s ease;
+}
+
+.action-button:hover {
+    filter: brightness(1.08);
+}
+
+.action-button:active {
+    transform: scale(0.99);
+}
+
+.action-button.danger {
+    background: var(--critical);
+}
 </style>
 )rawliteral");
 }
@@ -974,7 +1011,8 @@ void WebPageBuilder::addNumberInput(
     float maximum,
     float step,
     const String& unit,
-    const String& description)
+    const String& description,
+    uint8_t decimals)
 {
     if (!formOpen_)
     {
@@ -999,7 +1037,9 @@ void WebPageBuilder::addNumberInput(
     html_ += F("<input type=\"number\" name=\"");
     html_ += escapeHtml(name);
     html_ += F("\" value=\"");
-    html_ += String(value, 1);
+    html_ += String(
+        value,
+        static_cast<unsigned int>(decimals));
     html_ += F("\" min=\"");
     html_ += String(minimum, 1);
     html_ += F("\" max=\"");
@@ -1272,4 +1312,69 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 )rawliteral");
+}
+
+void WebPageBuilder::addPasswordInput(
+    const String& label,
+    const String& name,
+    size_t maxLength,
+    const String& description)
+{
+    if (!formOpen_)
+    {
+        return;
+    }
+
+    html_ += F("<label class=\"form-group\">");
+
+    html_ += F("<span class=\"form-label\">");
+    html_ += escapeHtml(label);
+    html_ += F("</span>");
+
+    if (description.length() > 0)
+    {
+        html_ += F("<span class=\"form-description\">");
+        html_ += escapeHtml(description);
+        html_ += F("</span>");
+    }
+
+    html_ += F("<input type=\"password\" ");
+
+    html_ += F("name=\"");
+    html_ += escapeHtml(name);
+    html_ += F("\" ");
+
+    html_ += F("value=\"\" ");
+
+    html_ += F("maxlength=\"");
+    html_ += String(maxLength);
+    html_ += F("\" ");
+
+    html_ += F("autocomplete=\"new-password\" ");
+    html_ += F("class=\"text-input\">");
+
+    html_ += F("</label>");
+}
+void WebPageBuilder::addActionButton(
+    const String& label,
+    const String& action,
+    bool danger)
+{
+    html_ += F("<form class=\"action-form\" method=\"POST\" action=\"");
+    html_ += escapeHtml(action);
+    html_ += F("\">");
+
+    html_ += F("<button class=\"action-button");
+
+    if (danger)
+    {
+        html_ += F(" danger");
+    }
+
+    html_ += F("\" type=\"submit\">");
+
+    html_ += escapeHtml(label);
+
+    html_ += F("</button>");
+    html_ += F("</form>");
 }

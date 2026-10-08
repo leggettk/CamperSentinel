@@ -469,6 +469,14 @@ void SettingsPage::handleDevice()
         settings_->get();
 
     WebPageBuilder page;
+    
+    page.begin(
+        FW_NAME,
+        "Device Settings",
+        "Identity and general configuration.");
+
+    page.addNavigation("settings");
+
     if (server_->hasArg("saved"))
 {
     if (server_->hasArg("restart"))
@@ -484,45 +492,15 @@ void SettingsPage::handleDevice()
             StatusLevel::Normal);
     }
 }
-    page.begin(
-        PROJECT_NAME,
-        "Device Settings",
-        "Identity and general configuration.");
-    
+
+    page.beginCard("Device");
+
     page.beginForm(
     "/settings/device",
     "POST");
-    page.addNavigation("settings");
 
-    page.addHealthBanner(
-    "Camper Sentinel settings",
-    "Changes are stored on the device and remain available after a restart.",
-    StatusLevel::Neutral);
-
-    page.addSettingsCard(
-    "Alerts",
-    "Temperature thresholds, shore-power alerts, and SMS notifications.",
-    "/settings/alerts");
-
-page.addSettingsCard(
-    "Reporting",
-    "Control telemetry publishing and heartbeat timing.",
-    "/settings/reporting");
-
-page.addSettingsCard(
-    "Device",
-    "Change the device name, hostname, and general behavior.",
-    "/settings/device");
-
-page.addSettingsCard(
-    "Connectivity",
-    "Manage Wi-Fi, MQTT, and cellular preferences.",
-    "/settings/connectivity");
-
-page.addSettingsCard(
-    "Firmware",
-    "View firmware details and install an OTA update.",
-    "/ota");
+    
+    
 page.addTextInput(
     "Device Name",
     "deviceName",
@@ -547,6 +525,7 @@ page.addCheckbox(
     "Save Settings");
 
 page.endForm();
+page.endCard();
     page.addLink(
         "Back to Settings",
         "/settings");
@@ -705,6 +684,424 @@ void SettingsPage::handleDeviceSave()
             "Location",
             "/settings/device?saved=1");
     }
+
+    server_->send(
+        303,
+        "text/plain",
+        "");
+}
+
+void SettingsPage::handleConnectivity()
+{
+    if (server_ == nullptr ||
+        settings_ == nullptr ||
+        state_ == nullptr)
+    {
+        return;
+    }
+
+    const DeviceSettings& config =
+        settings_->get();
+
+    WebPageBuilder page;
+
+    page.begin(
+        FW_NAME,
+        "Connectivity Settings",
+        "Configure Wi-Fi and view network status.");
+
+    page.addNavigation("settings");
+
+    const bool restartRequired =
+    server_->hasArg("saved") ||
+    server_->hasArg("mqttSaved");
+
+if (restartRequired)
+{
+    page.beginCard("Apply Changes");
+
+    page.addHealthBanner(
+        "Restart required",
+        "Restart Camper Sentinel to apply the new connectivity settings.",
+        StatusLevel::Warning);
+
+    page.addActionButton(
+        "Restart Now",
+        "/restart");
+
+    page.endCard();
+}
+    if (server_->hasArg("mqttSaved"))
+{
+    page.addToast(
+        "MQTT settings saved. Restart Camper Sentinel to apply the changes.",
+        StatusLevel::Warning);
+}
+    page.beginCard("Current Status");
+
+    page.addStatus(
+        "Wi-Fi",
+        state_->wifi.connected
+            ? "Connected"
+            : "Disconnected",
+        state_->wifi.connected
+            ? StatusLevel::Normal
+            : StatusLevel::Warning);
+
+    if (state_->wifi.connected)
+    {
+        page.addValue(
+            "SSID",
+            state_->wifi.ssid);
+
+        page.addValue(
+            "IP Address",
+            state_->wifi.ipAddress);
+
+        page.addValue(
+            "Signal",
+            String(state_->wifi.rssi) + " dBm");
+    }
+
+    page.endCard();
+
+    page.beginCard("Wi-Fi Configuration");
+
+    page.beginForm(
+        "/settings/connectivity",
+        "POST");
+
+    page.addCheckbox(
+        "Enable Wi-Fi",
+        "wifiEnabled",
+        config.wifiEnabled,
+        "Enable local dashboard access and OTA updates.");
+
+    page.addTextInput(
+        "Wi-Fi SSID",
+        "wifiSSID",
+        config.wifiSSID,
+        32,
+        "Network name Camper Sentinel should connect to.");
+
+    page.addPasswordInput(
+        "Wi-Fi Password",
+        "wifiPassword",
+        64,
+        "Leave blank to keep the currently saved password.");
+
+    page.addSubmitButton(
+        "Save Settings");
+
+    page.endForm();
+
+    page.addSettingsFormScript();
+
+    page.endCard();
+
+    page.beginCard("MQTT Configuration");
+
+page.beginForm(
+    "/settings/connectivity/mqtt",
+    "POST");
+
+page.addCheckbox(
+    "Enable MQTT",
+    "mqttEnabled",
+    config.mqttEnabled,
+    "Enable remote telemetry and heartbeat publishing.");
+
+page.addTextInput(
+    "Broker",
+    "mqttHost",
+    config.mqttHost,
+    128,
+    "Hostname or IP address of the MQTT broker.");
+
+page.addNumberInput(
+    "Port",
+    "mqttPort",
+    config.mqttPort,
+    1,
+    65535,
+    1,
+    "",
+    "MQTT broker port. TLS commonly uses port 8883.",
+    0);
+
+page.addTextInput(
+    "Username",
+    "mqttUsername",
+    config.mqttUsername,
+    64,
+    "Username used to authenticate with the MQTT broker.");
+
+page.addPasswordInput(
+    "Password",
+    "mqttPassword",
+    128,
+    "Leave blank to keep the currently saved password.");
+
+page.addCheckbox(
+    "Enable TLS",
+    "mqttTlsEnabled",
+    config.mqttTlsEnabled,
+    "Use an encrypted connection to the MQTT broker.");
+
+page.addSubmitButton(
+    "Save MQTT Settings");
+
+page.endForm();
+
+page.addSettingsFormScript();
+
+page.endCard();
+
+    page.addLink(
+        "Back to Settings",
+        "/settings");
+
+    page.addFooter(
+        FW_VERSION,
+        formatUptime(
+            state_->system.uptimeSeconds));
+
+    server_->send(
+        200,
+        "text/html; charset=utf-8",
+        page.build());
+}
+
+void SettingsPage::handleConnectivitySave()
+{
+    if (server_ == nullptr ||
+        settings_ == nullptr)
+    {
+        return;
+    }
+
+    if (!server_->hasArg("wifiSSID"))
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "Wi-Fi SSID is missing.");
+
+        return;
+    }
+
+    String ssid =
+        server_->arg("wifiSSID");
+
+    String password =
+        server_->arg("wifiPassword");
+
+    ssid.trim();
+
+    if (ssid.length() > 32)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "Wi-Fi SSID must be 32 characters or fewer.");
+
+        return;
+    }
+
+    if (password.length() > 64)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "Wi-Fi password is too long.");
+
+        return;
+    }
+
+    DeviceSettings& config =
+        settings_->get();
+
+    config.wifiEnabled =
+        server_->hasArg("wifiEnabled");
+
+    config.wifiSSID =
+        ssid;
+
+    // Blank means keep the existing password.
+    if (password.length() > 0)
+    {
+        config.wifiPassword =
+            password;
+    }
+
+    if (!settings_->save())
+    {
+        if (logger_ != nullptr)
+        {
+            logger_->error(
+                "Failed to save connectivity settings");
+        }
+
+        server_->send(
+            500,
+            "text/plain; charset=utf-8",
+            "Failed to save connectivity settings.");
+
+        return;
+    }
+
+    if (logger_ != nullptr)
+    {
+        logger_->info(
+            String("Wi-Fi settings saved: SSID=") +
+            config.wifiSSID +
+            ", WiFi=" +
+            (config.wifiEnabled
+                ? "enabled"
+                : "disabled"));
+    }
+
+    server_->sendHeader(
+        "Location",
+        "/settings/connectivity?saved=1");
+
+    server_->send(
+        303,
+        "text/plain",
+        "");
+}
+void SettingsPage::handleMqttSave()
+{
+    if (server_ == nullptr ||
+        settings_ == nullptr)
+    {
+        return;
+    }
+
+    if (!server_->hasArg("mqttHost") ||
+        !server_->hasArg("mqttPort"))
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "Required MQTT settings are missing.");
+
+        return;
+    }
+
+    String host =
+        server_->arg("mqttHost");
+
+    String username =
+        server_->arg("mqttUsername");
+
+    String password =
+        server_->arg("mqttPassword");
+
+    host.trim();
+    username.trim();
+
+    const long port =
+        server_->arg("mqttPort").toInt();
+
+    if (host.length() > 128)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "MQTT broker hostname is too long.");
+
+        return;
+    }
+
+    if (port < 1 ||
+        port > 65535)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "MQTT port must be between 1 and 65535.");
+
+        return;
+    }
+
+    if (username.length() > 64)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "MQTT username is too long.");
+
+        return;
+    }
+
+    if (password.length() > 128)
+    {
+        server_->send(
+            400,
+            "text/plain; charset=utf-8",
+            "MQTT password is too long.");
+
+        return;
+    }
+
+    DeviceSettings& config =
+        settings_->get();
+
+    config.mqttEnabled =
+        server_->hasArg("mqttEnabled");
+
+    config.mqttHost =
+        host;
+
+    config.mqttPort =
+        static_cast<uint16_t>(port);
+
+    config.mqttUsername =
+        username;
+
+    config.mqttTlsEnabled =
+        server_->hasArg("mqttTlsEnabled");
+
+    // Blank means preserve the currently stored password.
+    if (!password.isEmpty())
+    {
+        config.mqttPassword =
+            password;
+    }
+
+    if (!settings_->save())
+    {
+        if (logger_ != nullptr)
+        {
+            logger_->error(
+                "Failed to save MQTT settings");
+        }
+
+        server_->send(
+            500,
+            "text/plain; charset=utf-8",
+            "Failed to save MQTT settings.");
+
+        return;
+    }
+
+    if (logger_ != nullptr)
+    {
+        logger_->info(
+            String("MQTT settings saved: host=") +
+            config.mqttHost +
+            ", port=" +
+            String(config.mqttPort) +
+            ", TLS=" +
+            (config.mqttTlsEnabled
+                ? "enabled"
+                : "disabled"));
+    }
+
+    server_->sendHeader(
+        "Location",
+        "/settings/connectivity?mqttSaved=1");
 
     server_->send(
         303,

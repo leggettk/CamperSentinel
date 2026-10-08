@@ -40,6 +40,11 @@ struct CellularState
 struct MQTTState
 {
     bool connected = false;
+
+    int lastError = 0;
+
+    uint32_t connectionFailureCount = 0;
+    uint32_t lastConnectedTimeSeconds = 0;
 };
 
 struct AlarmState

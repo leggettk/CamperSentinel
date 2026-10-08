@@ -59,7 +59,8 @@ public:
     void warningf(const char *format, ...);
 
     void errorf(const char *format, ...);
-
+    void telemetry(const String& message);
+    void telemetryf(const char* format, ...);
  
 
 private:
@@ -77,7 +78,10 @@ private:
  
 
     const char *levelName(LogLevel level) const;
-
+    
+    void writeSerial(
+    LogLevel level,
+    const String& message);
  
 
     LogLevel currentLevel = LogLevel::Info;

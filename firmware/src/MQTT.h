@@ -1,9 +1,12 @@
 #pragma once
 #include "AppState.h"
+#include "settings.h"
 class MQTT
 {
 public:
-    bool begin();
+    bool begin(
+        Settings& settings,
+        AppState& state);
     void loop();
 
     bool isConnected() const;
@@ -13,6 +16,8 @@ public:
     bool publishHeartbeat(const AppState &state);
 
 private:
+    AppState* state_ = nullptr;
+    Settings* settings_ = nullptr;
     bool connect();
     bool publishDiscovery();
     bool discoveryPublished = false;
@@ -22,6 +27,7 @@ private:
     bool publishShorePowerDiscovery();
     bool publishSignalDiscovery();
     bool publishUptimeDiscovery();
+    
 
     static constexpr unsigned long RECONNECT_INTERVAL_MS = 30000UL;
 };

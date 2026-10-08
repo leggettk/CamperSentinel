@@ -15,6 +15,7 @@
 #include "WiFiService.h"
 #include "WebServerService.h"
 #include "OTAService.h"
+#include "EventLog.h"
 
 Settings settings;
 AppState state;
@@ -47,7 +48,7 @@ void updateTemperature(unsigned long now)
     {
         state.temperature.ambientF = reading;
 
-        logger.infof(
+        logger.telemetryf(
             "Ambient temperature: %.1f F",
             state.temperature.ambientF);
     }
@@ -78,7 +79,7 @@ void updateBattery(unsigned long now)
 
     if (state.power.batteryVoltageValid)
     {
-        logger.infof(
+        logger.telemetryf(
             "Camper battery: %.2f V",
             state.power.batteryVoltage);
     }
@@ -380,7 +381,8 @@ void publishHeartbeat(unsigned long now)
 }
 
 void setup()
-{
+{   
+
     logger.begin(115200, LogLevel::Info);
     delay(500);
 
@@ -438,13 +440,13 @@ else
         logger.error("Modem FAILED");
     }
 
-    if (mqtt.begin())
+    if (mqtt.begin(settings, state))
     {
-        logger.info("MQTT OK");
+        logger.info("MQTT service initialized");
     }
     else
     {
-        logger.warning("MQTT unavailable");
+        logger.warning("MQTT service initialization failed");
     }
 }
 

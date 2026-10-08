@@ -1,54 +1,6 @@
 #include "WebServerService.h"
 #include "WebPageBuilder.h"
-#include "Constants.h"
-#include "Web/DashboardPage.h"
-#include <Update.h>
 
-DashboardPage dashboardPage_;
-static String formatUptimeValue(uint32_t totalSeconds)
-{
-    const uint32_t days =
-        totalSeconds / 86400UL;
-
-    totalSeconds %= 86400UL;
-
-    const uint8_t hours =
-        totalSeconds / 3600UL;
-
-    totalSeconds %= 3600UL;
-
-    const uint8_t minutes =
-        totalSeconds / 60UL;
-
-    const uint8_t seconds =
-        totalSeconds % 60UL;
-
-    char buffer[40];
-
-    if (days > 0)
-    {
-        snprintf(
-            buffer,
-            sizeof(buffer),
-            "%lu d %02u:%02u:%02u",
-            static_cast<unsigned long>(days),
-            hours,
-            minutes,
-            seconds);
-    }
-    else
-    {
-        snprintf(
-            buffer,
-            sizeof(buffer),
-            "%02u:%02u:%02u",
-            hours,
-            minutes,
-            seconds);
-    }
-
-    return String(buffer);
-}
 
 bool WebServerService::begin(
     Settings& settings,
@@ -60,11 +12,7 @@ bool WebServerService::begin(
     {
         return true;
     }
-    otaService_ = &otaService;
-    settings_ = &settings;
-    appState_ = &appState;
-    logger_ = &logger;
-
+    
     dashboardPage_.begin(
     server_,
     appState);
@@ -81,12 +29,17 @@ bool WebServerService::begin(
     logger,
     otaService);
 
+    diagnosticsPage_.begin(
+        server_,
+        appState,
+        settings);
+
     registerRoutes();
 
     server_.begin();
     started_ = true;
 
-    logger_->info(String("Web server started on port 80"));
+    logger.info(String("Web server started on port 80"));
 
     return true;
 }
@@ -108,6 +61,9 @@ bool WebServerService::running() const
 
 void WebServerService::registerRoutes()
 {
+    //
+    // Dashboard
+    //
     server_.on(
         "/",
         HTTP_GET,
@@ -116,12 +72,9 @@ void WebServerService::registerRoutes()
             dashboardPage_.handle();
         });
 
-    server_.onNotFound(
-        [this]()
-        {
-            handleNotFound();
-        });
-
+    //
+    // OTA
+    //
     server_.on(
         "/ota",
         HTTP_GET,
@@ -137,115 +90,147 @@ void WebServerService::registerRoutes()
         {
             otaPage_.handleUploadComplete();
         },
-    [this]()
-    {
-        otaPage_.handleUpload();
-    });
+        [this]()
+        {
+            otaPage_.handleUpload();
+        });
+
+    //
+    // Settings
+    //
+    server_.on(
+        "/settings",
+        HTTP_GET,
+        [this]()
+        {
+            settingsPage_.handleLanding();
+        });
+
+    //
+    // Alert Settings
+    //
+    server_.on(
+        "/settings/alerts",
+        HTTP_GET,
+        [this]()
+        {
+            settingsPage_.handleAlerts();
+        });
 
     server_.on(
-    "/settings",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleLanding();
-    });
+        "/settings/alerts",
+        HTTP_POST,
+        [this]()
+        {
+            settingsPage_.handleAlertsSave();
+        });
+
+    //
+    // Reporting Settings
+    //
+    server_.on(
+        "/settings/reporting",
+        HTTP_GET,
+        [this]()
+        {
+            settingsPage_.handleReporting();
+        });
 
     server_.on(
-    "/settings/alerts",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleAlerts();
-    });
+        "/settings/reporting",
+        HTTP_POST,
+        [this]()
+        {
+            settingsPage_.handleReportingSave();
+        });
+
+    //
+    // Device Settings
+    //
+    server_.on(
+        "/settings/device",
+        HTTP_GET,
+        [this]()
+        {
+            settingsPage_.handleDevice();
+        });
 
     server_.on(
-    "/settings/alerts",
-    HTTP_POST,
-    [this]()
-    {
-        settingsPage_.handleAlertsSave();
-    });
+        "/settings/device",
+        HTTP_POST,
+        [this]()
+        {
+            settingsPage_.handleDeviceSave();
+        });
 
-    server_.on(
-    "/settings/reporting",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleReporting();
-    });
-
-    server_.on(
-    "/settings/device",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleDevice();
-    });
-
+    //
+    // Connectivity Settings
+    //
     server_.on(
     "/settings/connectivity",
     HTTP_GET,
     [this]()
     {
-        WebPageBuilder page;
+        settingsPage_.handleConnectivity();
+    });
 
-        page.begin(
-            PROJECT_NAME,
-            "Connectivity Settings",
-            "Wi-Fi, MQTT, and cellular configuration.");
+    server_.on(
+    "/settings/connectivity",
+    HTTP_POST,
+    [this]()
+    {
+        settingsPage_.handleConnectivitySave();
+    });
 
-        page.addNavigation("settings");
-
-        page.addHealthBanner(
-            "Connectivity configuration",
-            "Editable controls will be added later.",
-            StatusLevel::Neutral);
-
-        page.addLink(
-            "Back to Settings",
-            "/settings");
-
+    //
+    // 404 handler must be registered last.
+    //
+    server_.onNotFound(
+        [this]()
+        {
+            handleNotFound();
+        });
+    
+    server_.on(
+    "/settings/connectivity/mqtt",
+    HTTP_POST,
+    [this]()
+    {
+        settingsPage_.handleMqttSave();
+    });   
+    
+    server_.on(
+    "/diagnostics",
+    HTTP_GET,
+    [this]()
+    {
+        diagnosticsPage_.handle();
+    });
+    
+    server_.on(
+    "/restart",
+    HTTP_POST,
+    [this]()
+    {
         server_.send(
             200,
             "text/html; charset=utf-8",
-            page.build());
-        server_.on(
-            "/settings/alerts",
-            HTTP_POST,
-            [this]()
-        {
-            settingsPage_.handleAlertsSave();
-        });
-    });
-server_.on(
-    "/settings/reporting",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleReporting();
-    });
+            "<!DOCTYPE html>"
+            "<html>"
+            "<head>"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<meta http-equiv=\"refresh\" content=\"8;url=/\">"
+            "<title>Restarting</title>"
+            "</head>"
+            "<body>"
+            "<h2>Camper Sentinel is restarting...</h2>"
+            "<p>Please wait while the device reconnects.</p>"
+            "</body>"
+            "</html>");
 
-server_.on(
-    "/settings/reporting",
-    HTTP_POST,
-    [this]()
-    {
-        settingsPage_.handleReportingSave();
-    });
-server_.on(
-    "/settings/device",
-    HTTP_GET,
-    [this]()
-    {
-        settingsPage_.handleDevice();
-    });
+        delay(500);
 
-server_.on(
-    "/settings/device",
-    HTTP_POST,
-    [this]()
-    {
-        settingsPage_.handleDeviceSave();
+        ESP.restart();
     });
 }
 

@@ -3,12 +3,11 @@
 #include <PubSubClient.h>
 #include <SSLClient.h>
 #include <TinyGsmClient.h>
-
+#include "Secrets.h"
 #include "Logger.h"
 #include "Modem.h"
 #include "MQTT.h"
 #include "Pins.h"
-#include "Secrets.h"
 #include "TrustAnchors.h"
 #include "Version.h"
 
@@ -60,9 +59,34 @@ constexpr char UPTIME_DISCOVERY_TOPIC[] =
     "homeassistant/sensor/camper01_uptime/config";
 }
 
-bool MQTT::begin()
+bool MQTT::begin(
+    Settings& settings,
+    AppState& state)
 {
-    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    settings_ = &settings;
+    state_ = &state;
+
+    const DeviceSettings& config =
+        settings_->get();
+
+    if (!config.mqttEnabled)
+    {
+        logger.info(
+            "MQTT disabled in settings");
+
+        return true;
+    }
+
+    if (config.mqttHost.isEmpty())
+    {
+        logger.warning(
+            "MQTT broker is not configured");
+
+        return false;
+    }
+
+    // Existing MQTT initialization continues...
+    mqttClient.setServer(config.mqttHost.c_str(),config.mqttPort);
     mqttClient.setKeepAlive(60);
     mqttClient.setSocketTimeout(30);
     mqttClient.setBufferSize(1024);
@@ -72,60 +96,123 @@ bool MQTT::begin()
 
 bool MQTT::connect()
 {
-    if (!cellular.isDataConnected())
+    if (settings_ == nullptr)
     {
-        logger.warning("MQTT skipped: packet data is offline");
+        logger.error(
+            "MQTT connect failed: settings unavailable");
+
         return false;
     }
+
+    const DeviceSettings& config =
+        settings_->get();
+
+    String clientId =
+        config.hostname + "-mqtt";
+
+    if (!config.mqttEnabled)
+    {
+        return false;
+    }
+
+    if (config.mqttHost.isEmpty())
+    {
+        logger.warning(
+            "MQTT connect skipped: broker not configured");
+
+        return false;
+    }
+
+    if (!cellular.isDataConnected())
+    {
+        logger.warning(
+            "MQTT skipped: packet data is offline");
+
+        return false;
+    }
+
     tlsClient.stop();
 
     logger.infof(
         "Connecting to MQTT TLS broker %s:%u",
-        MQTT_HOST,
-        static_cast<unsigned int>(MQTT_PORT));
+        config.mqttHost.c_str(),
+        static_cast<unsigned int>(
+            config.mqttPort));
 
-    const bool connected = mqttClient.connect(
-        MQTT_CLIENT_ID,
-        MQTT_USER,
-        MQTT_PASSWORD,
-        STATUS_TOPIC,
-        1,
-        true,
-        "offline");
+    const bool connected =
+        mqttClient.connect(
+            clientId.c_str(),
+            config.mqttUsername.c_str(),
+            config.mqttPassword.c_str(),
+            STATUS_TOPIC,
+            1,
+            true,
+            "offline");
 
     if (!connected)
     {
+        const int mqttState =
+        mqttClient.state();
+
+        if (state_ != nullptr)
+        {
+        state_->mqtt.connected = false;
+        state_->mqtt.lastError = mqttState;
+        state_->mqtt.connectionFailureCount++;
+        }
         logger.errorf(
             "MQTT connection failed, state=%d",
             mqttClient.state());
 
         tlsClient.stop();
+
         return false;
     }
-    if (!discoveryPublished)
-    {
-            if (publishDiscovery())
-            {
-                discoveryPublished = true;
-            }
-    }
+
     mqttClient.publish(
         STATUS_TOPIC,
         "online",
         true);
 
-    logger.info("MQTT TLS connected");
-
-    if (!publishDiscovery())
+    logger.info(
+        "MQTT TLS connected");
+    
+    if (state_ != nullptr)
     {
-        logger.warning(
-        "Ambient discovery publish failed");
+    state_->mqtt.connected = true;
+    state_->mqtt.lastError = 0;
+
+    state_->mqtt.lastConnectedTimeSeconds =
+        millis() / 1000UL;
     }
+
+    if (!discoveryPublished)
+    {
+        if (publishDiscovery())
+        {
+            discoveryPublished = true;
+        }
+    }
+
     return true;
 }
 
 void MQTT::loop()
 {
+    if (settings_ == nullptr)
+    {
+        return;
+    }
+
+    const DeviceSettings& config =
+        settings_->get();
+        
+    
+    if (!config.mqttEnabled)
+    {
+        return;
+    }
+    
     if (mqttClient.connected())
     {
         mqttClient.loop();
