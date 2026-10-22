@@ -8,9 +8,12 @@
 enum class DisplayPage : uint8_t
 {
     Ambient = 0,
+    Battery1,
+    Battery2,
     LTE,
     Internet,
-    System
+    System,
+    Count
 };
 
 struct DisplayData
@@ -53,6 +56,7 @@ public:
 
 private:
     void renderAmbient(const AppState &state);
+    void renderBattery(const AppState &state, uint8_t slot);
     void renderLTE(const AppState &state);
     void renderInternet(const AppState &state);
     void renderSystem(const AppState &state);

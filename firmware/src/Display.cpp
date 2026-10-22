@@ -1,6 +1,8 @@
 #include "Display.h"
 
 #include <Wire.h>
+#include <esp_heap_caps.h>
+#include "BatteryFreshness.h"
 
 #include "Pins.h"
 #include "Config.h"
@@ -196,6 +198,14 @@ void Display::update(const AppState &state)
             renderAmbient(state);
             break;
 
+        case DisplayPage::Battery1:
+            renderBattery(state, 0);
+            break;
+
+        case DisplayPage::Battery2:
+            renderBattery(state, 1);
+            break;
+
         case DisplayPage::LTE:
             renderLTE(state);
             break;
@@ -207,6 +217,11 @@ void Display::update(const AppState &state)
         case DisplayPage::System:
             renderSystem(state);
             break;
+
+        default:
+            page = DisplayPage::Ambient;
+            renderAmbient(state);
+            break;
     }
 }
 
@@ -215,7 +230,7 @@ void Display::nextPage()
     wake();
 
     const uint8_t next =
-        (static_cast<uint8_t>(page) + 1) % 4;
+        (static_cast<uint8_t>(page) + 1) % static_cast<uint8_t>(DisplayPage::Count);
 
     page = static_cast<DisplayPage>(next);
     lastRefreshMs = 0;
@@ -229,7 +244,7 @@ void Display::previousPage()
 
     if (current == 0)
     {
-        current = 3;
+        current = static_cast<uint8_t>(DisplayPage::Count) - 1;
     }
     else
     {
@@ -315,7 +330,7 @@ void Display::renderAmbient(
     }
 
     display.setCursor(0, 28);
-    display.print("BATT");
+    display.print("BACKUP");
 
     display.setCursor(47, 28);
 
@@ -360,6 +375,73 @@ void Display::renderAmbient(
         display.print(state.cellular.signalQuality);
     }
 
+    display.display();
+}
+
+void Display::renderBattery(const AppState &state, uint8_t slot)
+{
+    const auto &battery = state.lithium[slot];
+    const uint32_t now = millis();
+    const bool fresh = batterySampleFresh(battery.valid, now, battery.updatedMs) && battery.capacityAh > 0;
+    display.clearDisplay();
+    drawHeader(slot == 0 ? "Renogy Battery 1" : "Renogy Battery 2");
+
+    if (!fresh)
+    {
+        display.setCursor(0, 18);
+        display.print(battery.address.isEmpty() ? "Not assigned" : "Data unavailable");
+        display.setCursor(0, 31);
+        // Keep diagnostics within the 21-character display width.
+        if (battery.address.isEmpty()) display.print("Use battery settings");
+        else if (battery.error.indexOf("disabled") >= 0 || battery.error.indexOf("Disabled") >= 0)
+            display.print("Monitoring disabled");
+        else if (battery.error.startsWith("Waiting")) display.print("Waiting for a poll");
+        else display.print("Awaiting fresh data");
+        display.setCursor(0, 46);
+        display.print("Details on dashboard");
+        display.display();
+        return;
+    }
+
+    float charge = battery.remainingAh / battery.capacityAh * 100.0f;
+    if (charge < 0) charge = 0;
+    if (charge > 100) charge = 100;
+    display.setTextSize(2);
+    display.setCursor(0, 15);
+    display.print(charge, 0);
+    display.print("%");
+
+    display.setTextSize(1);
+    display.setCursor(72, 16);
+    display.print("Age ");
+    const uint32_t ageSeconds = uint32_t(now - battery.updatedMs) / 1000UL;
+    if (ageSeconds < 60) { display.print(ageSeconds); display.print("s"); }
+    else { display.print(ageSeconds / 60); display.print("m"); }
+    display.setCursor(72, 25);
+    // A failed poll may still have a recent cached sample. Do not call it live.
+    display.print(battery.error.isEmpty() ? "OK" : "CACHED");
+
+    display.setCursor(0, 35);
+    display.print(battery.voltage, 1);
+    display.print("V");
+    display.setCursor(54, 35);
+    display.print(battery.current, 2);
+    display.print("A");
+
+    display.setCursor(0, 45);
+    display.print(battery.remainingAh, 1);
+    display.print("/");
+    display.print(battery.capacityAh, 1);
+    display.print(" Ah");
+
+    display.setCursor(0, 55);
+    display.print("Temp ");
+    if (battery.temperatureValid)
+    {
+        display.print(battery.temperatureC * 9.0f / 5.0f + 32.0f, 1);
+        display.print("F");
+    }
+    else display.print("-- F");
     display.display();
 }
 
@@ -427,36 +509,27 @@ void Display::renderInternet(
     drawHeader("Network");
 
     display.setCursor(0, 16);
-    display.print("Packet data:");
-
-    display.setCursor(88, 16);
-    display.print(
-        state.cellular.dataConnected
-            ? "ON"
-            : "OFF");
+    display.print("WiFi: ");
+    if (state.wifi.connected)
+    {
+        display.print(state.wifi.rssi);
+        display.print(" dBm");
+    }
+    else display.print(state.wifi.accessPointActive ? "Setup AP" : "OFF");
 
     display.setCursor(0, 29);
-    display.print("MQTT:");
-
-    display.setCursor(88, 29);
-    display.print(
-        state.mqtt.connected
-            ? "ON"
-            : "OFF");
+    display.print("LTE data: ");
+    display.print(state.cellular.dataConnected ? "ON" : "OFF");
 
     display.setCursor(0, 42);
-    display.print("IP address");
+    display.print("MQTT: ");
+    display.print(state.mqtt.connected ? state.mqtt.transport : "OFFLINE");
 
     display.setCursor(0, 54);
 
-    String ip = state.cellular.ipAddress;
-
-    if (ip.length() > 21)
-    {
-        ip =
-            ip.substring(0, 21);
-    }
-
+    display.print("IP ");
+    const String &ip = state.wifi.connected ? state.wifi.ipAddress
+        : state.wifi.accessPointActive ? state.wifi.accessPointIP : state.cellular.ipAddress;
     display.print(ip);
 
     display.display();
@@ -518,11 +591,11 @@ void Display::renderSystem(
     display.print("m");
 
     display.setCursor(0, 42);
-    display.print("Free heap");
+    display.print("RAM free");
 
     display.setCursor(68, 42);
     display.print(
-        state.system.freeHeap / 1024UL);
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024UL);
 
     display.print(" KB");
 

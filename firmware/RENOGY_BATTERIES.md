@@ -18,6 +18,24 @@
 An unused slot can be left blank. Both slots must have different addresses.
 Bluetooth monitoring can be disabled from this page.
 
+## OLED pages
+
+Press the display button to cycle through Ambient, Renogy Battery 1, Renogy
+Battery 2, Connectivity, Network and System. Pressing it while the display is
+asleep wakes the current page; the next press advances it.
+
+Each battery page shows charge percentage, sample age, voltage, signed current,
+remaining/capacity Ah and temperature in Fahrenheit. `CACHED` means the latest
+poll failed but the last successful sample is still within the 12-minute limit;
+its displayed age keeps increasing. Expired or missing readings show
+`Data unavailable`, and an unassigned slot shows `Not assigned`.
+
+The Network page shows Wi-Fi signal, cellular data status, the MQTT transport,
+and the Wi-Fi IP when connected (otherwise setup AP or cellular IP). The System
+page's `RAM free` value uses internal byte-addressable RAM. The Ambient page's
+`BACKUP` voltage is the board's existing power input reading, separate from the
+two Renogy battery pages.
+
 ## Readings and MQTT
 
 Each battery has independent voltage, signed current, remaining Ah, capacity Ah,
