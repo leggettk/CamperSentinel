@@ -19,6 +19,14 @@ struct PowerState
 struct WiFiState
 {
     bool connected = false;
+    bool accessPointActive = false;
+    uint32_t disconnectCount = 0;
+    uint32_t lastDisconnectReason = 0;
+    uint32_t driverRecoveryCount = 0;
+    uint32_t networkFailureCount = 0;
+    bool recoveryPending = false;
+    String accessPointSSID;
+    String accessPointIP;
 
     String ssid;
     String ipAddress = "No IP";
@@ -40,6 +48,7 @@ struct CellularState
 struct MQTTState
 {
     bool connected = false;
+    String transport = "None";
 
     int lastError = 0;
 
@@ -67,6 +76,18 @@ struct SystemState
 
 struct AppState
 {
+    struct LithiumBattery
+    {
+        String address;
+        String model;
+        String error = "Not configured";
+        bool valid = false;
+        bool temperatureValid = false;
+        float voltage = 0, current = 0, remainingAh = 0, capacityAh = 0;
+        float temperatureC = 0;
+        uint32_t updatedMs = 0;
+    };
+    LithiumBattery lithium[2];
     TemperatureState temperature;
     PowerState power;
 

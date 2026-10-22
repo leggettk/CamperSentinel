@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 
 #include "Button.h"
 #include "Display.h"
@@ -16,6 +17,7 @@
 #include "WebServerService.h"
 #include "OTAService.h"
 #include "EventLog.h"
+#include "RenogyBatteries.h"
 
 Settings settings;
 AppState state;
@@ -384,6 +386,8 @@ void setup()
 {   
 
     logger.begin(115200, LogLevel::Info);
+    logger.infof("ESP32 reset reason: %d (1=power-on, 3=software, 4=panic, 5/6/7=watchdog, 9=brownout)",
+        static_cast<int>(esp_reset_reason()));
     delay(500);
 
     battery.begin();
@@ -422,6 +426,7 @@ else
     }
 
     userButton.begin();
+    renogyBatteries.begin();
 
     if (!temp.begin())
     {
@@ -456,8 +461,16 @@ void loop()
 {
     const unsigned long now = millis();
 
-    mqtt.loop();
     wifi.update();
+    webServerService.update();
+    mqtt.loop();
+    renogyBatteries.update(state);
+    static unsigned long lastLithiumPublish = 0;
+    if (mqtt.isConnected() && now - lastLithiumPublish >= 30000UL)
+    {
+        lastLithiumPublish = now;
+        mqtt.publishLithiumBatteries(state);
+    }
     webServerService.update();
     handleButton();
     updateTemperature(now);

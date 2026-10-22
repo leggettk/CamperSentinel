@@ -1,0 +1,63 @@
+# Paste this whole file into a Manual card in your Home Assistant dashboard.
+# Uses only built-in cards; HACS is not required.
+# Battery 1 charge is confirmed. Other entity IDs follow the firmware's
+# discovery names; select your actual entities if HA has named them differently.
+type: grid
+title: Camper Batteries
+columns: 2
+square: false
+cards:
+  - type: vertical-stack
+    cards:
+      - type: gauge
+        entity: sensor.camper_monitor_battery_1_charge
+        name: Battery 1
+        min: 0
+        max: 100
+        needle: true
+        severity:
+          green: 50
+          yellow: 20
+          red: 0
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: sensor.camper_monitor_battery_1_voltage
+            name: Voltage
+            icon: mdi:flash
+          - entity: sensor.camper_monitor_battery_1_current
+            name: Current
+            icon: mdi:current-dc
+          - entity: sensor.camper_monitor_battery_1_remaining_charge
+            name: Remaining
+            icon: mdi:battery-medium
+          - entity: sensor.camper_monitor_battery_1_temperature
+            name: Temperature
+            icon: mdi:thermometer
+  - type: vertical-stack
+    cards:
+      - type: gauge
+        entity: sensor.camper_monitor_battery_2_charge
+        name: Battery 2
+        min: 0
+        max: 100
+        needle: true
+        severity:
+          green: 50
+          yellow: 20
+          red: 0
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: sensor.camper_monitor_battery_2_voltage
+            name: Voltage
+            icon: mdi:flash
+          - entity: sensor.camper_monitor_battery_2_current
+            name: Current
+            icon: mdi:current-dc
+          - entity: sensor.camper_monitor_battery_2_remaining_charge
+            name: Remaining
+            icon: mdi:battery-medium
+          - entity: sensor.camper_monitor_battery_2_temperature
+            name: Temperature
+            icon: mdi:thermometer

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include "HtmlStream.h"
+class WebServer;
 
 enum class StatusLevel
 {
@@ -13,6 +15,7 @@ enum class StatusLevel
 class WebPageBuilder
 {
 public:
+    explicit WebPageBuilder(WebServer& server) : html_(server) {}
     void begin(
         const String& title,
         const String& heading,
@@ -89,7 +92,7 @@ public:
     void addToast(
         const String& message,
         StatusLevel level = StatusLevel::Normal);    
-    String build();
+    void send(WebServer& server);
     void addSettingsFormScript();
     void addTextInput(
     const String& label,
@@ -107,7 +110,8 @@ public:
     const String& action,
     bool danger = false);
 private:
-    String html_;
+    HtmlStream html_;
+    void finish();
 
     bool cardOpen_ = false;
     bool gridOpen_ = false;

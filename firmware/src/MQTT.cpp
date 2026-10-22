@@ -3,6 +3,7 @@
 #include <PubSubClient.h>
 #include <SSLClient.h>
 #include <TinyGsmClient.h>
+#include <WiFi.h>
 #include "Secrets.h"
 #include "Logger.h"
 #include "Modem.h"
@@ -10,19 +11,60 @@
 #include "Pins.h"
 #include "TrustAnchors.h"
 #include "Version.h"
+#include "BatteryFreshness.h"
+#include "MqttNetworkPolicy.h"
+#include "WiFiService.h"
 
 // Working SIM7000 TCP transport.
 TinyGsmClient cellularClient(gsm);
+WiFiClient wifiClient;
+
+// Switch the underlying TCP socket only while TLS is stopped. A single TLS
+// engine serves either network instead of keeping two engines in RAM.
+class MqttTransport : public Client
+{
+public:
+    Client* socket = &cellularClient;
+    int connect(IPAddress ip, uint16_t port) override { return socket->connect(ip, port); }
+    int connect(const char* host, uint16_t port) override { return socket->connect(host, port); }
+    size_t write(uint8_t value) override { return socket->write(value); }
+    size_t write(const uint8_t* data, size_t length) override { return socket->write(data, length); }
+    int available() override { return socket->available(); }
+    int read() override { return socket->read(); }
+    int read(uint8_t* data, size_t length) override { return socket->read(data, length); }
+    int peek() override { return socket->peek(); }
+    void flush() override { socket->flush(); }
+    void stop() override { socket->stop(); }
+    uint8_t connected() override { return socket->connected(); }
+    operator bool() override { return static_cast<bool>(*socket); }
+} mqttTransport;
 
 // TLS layer with server-certificate verification.
-SSLClient tlsClient(
-    cellularClient,
+class MqttTlsClient : public SSLClient
+{
+public:
+    using SSLClient::SSLClient;
+    uint8_t connected() override
+    {
+        // A failed TCP/DNS attempt leaves a Print error flag. Avoid printing
+        // the same TLS error every time the main loop checks connectivity.
+        return getWriteError() ? 0 : SSLClient::connected();
+    }
+    int connect(const char* host, uint16_t port) override
+    {
+        clearWriteError();
+        return SSLClient::connect(host, port);
+    }
+};
+MqttTlsClient tlsClient(
+    mqttTransport,
     TAs,
     static_cast<size_t>(TAs_NUM),
     PIN_TLS_ENTROPY);
 
 // MQTT protocol layer.
 PubSubClient mqttClient(tlsClient);
+static bool usingWifi = false;
 
 MQTT mqtt;
 
@@ -94,6 +136,12 @@ bool MQTT::begin(
     return connect();
 }
 
+bool MQTT::preferWifi() const
+{
+    return preferMqttWifi(settings_->get().wifiEnabled && WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(),
+        cellular.isDataConnected(), wifiCoolingDown_, millis(), wifiFailedAt_);
+}
+
 bool MQTT::connect()
 {
     if (settings_ == nullptr)
@@ -123,21 +171,38 @@ bool MQTT::connect()
         return false;
     }
 
-    if (!cellular.isDataConnected())
+    const bool wifiAvailable = preferWifi();
+    // Synchronize the selected network even when both networks are offline,
+    // so a network change cannot bypass the reconnect interval every loop.
+    usingWifi = wifiAvailable;
+    if (!wifiAvailable && !cellular.isDataConnected())
     {
         logger.warning(
-            "MQTT skipped: packet data is offline");
+            "MQTT skipped: WiFi and cellular data are offline");
 
         return false;
     }
 
     tlsClient.stop();
+    wifiClient.stop();
+    cellularClient.stop();
+    mqttTransport.socket = usingWifi ? static_cast<Client*>(&wifiClient) : static_cast<Client*>(&cellularClient);
+    Client* transport = config.mqttTlsEnabled ? static_cast<Client*>(&tlsClient) : static_cast<Client*>(&mqttTransport);
+    mqttClient.setClient(*transport);
+    mqttClient.setServer(config.mqttHost.c_str(), config.mqttPort);
+    if (state_ != nullptr)
+    {
+        state_->mqtt.connected = false;
+        state_->mqtt.transport = usingWifi ? "WiFi" : "Cellular";
+    }
 
     logger.infof(
-        "Connecting to MQTT TLS broker %s:%u",
+        "Connecting to MQTT broker %s:%u via %s (%s)",
         config.mqttHost.c_str(),
         static_cast<unsigned int>(
-            config.mqttPort));
+            config.mqttPort),
+        usingWifi ? "WiFi" : "Cellular",
+        config.mqttTlsEnabled ? "TLS" : "plain TCP");
 
     const bool connected =
         mqttClient.connect(
@@ -165,6 +230,22 @@ bool MQTT::connect()
             mqttClient.state());
 
         tlsClient.stop();
+        transport->stop();
+        if (usingWifi)
+        {
+            if (wifiFailures_ < 3) ++wifiFailures_;
+            if (wifiFailures_ >= 3)
+            {
+                wifiCoolingDown_ = true;
+                wifiFailedAt_ = millis();
+                logger.warning("MQTT WiFi failed repeatedly: prefer cellular for five minutes when available");
+            }
+        }
+        else
+        {
+            // If cellular also fails, try WiFi on the next scheduled retry.
+            wifiCoolingDown_ = false;
+        }
 
         return false;
     }
@@ -174,8 +255,11 @@ bool MQTT::connect()
         "online",
         true);
 
-    logger.info(
-        "MQTT TLS connected");
+    logger.infof("MQTT connected via %s (%s)",
+        usingWifi ? "WiFi" : "Cellular",
+        config.mqttTlsEnabled ? "TLS" : "plain TCP");
+    if (usingWifi) { wifiFailures_ = 0; wifiCoolingDown_ = false; wifi.noteNetworkSuccess(); }
+    lithiumDiscoveryPublished_ = false;
     
     if (state_ != nullptr)
     {
@@ -210,27 +294,53 @@ void MQTT::loop()
     
     if (!config.mqttEnabled)
     {
+        mqttClient.disconnect();
+        if (state_ != nullptr) state_->mqtt.connected = false;
         return;
     }
-    
+    bool wifiAvailable = preferWifi();
+    if (wifiAvailable && !usingWifi && mqttClient.connected())
+    {
+        // A WiFi retry must not tear down working cellular MQTT merely to
+        // discover that the broker name still cannot be resolved. Probe via
+        // the WiFi stack while the existing TLS transport remains cellular.
+        IPAddress brokerAddress;
+        if (!WiFi.hostByName(config.mqttHost.c_str(), brokerAddress))
+        {
+            wifiCoolingDown_ = true;
+            wifiFailedAt_ = millis();
+            wifiAvailable = false;
+            wifi.noteNetworkFailure();
+            logger.warning("WiFi broker DNS probe failed; keeping cellular MQTT connected and retrying WiFi in five minutes");
+        }
+    }
+    const bool transportChanged = wifiAvailable != usingWifi;
+    const bool switchLiveConnection = transportChanged && mqttClient.connected();
+    if (switchLiveConnection)
+    {
+        mqttClient.disconnect();
+        tlsClient.stop();
+        wifiClient.stop();
+        cellularClient.stop();
+    }
     if (mqttClient.connected())
     {
         mqttClient.loop();
+        if (state_ != nullptr) state_->mqtt.connected = mqttClient.connected();
         return;
     }
+    if (state_ != nullptr) state_->mqtt.connected = false;
 
     const unsigned long now = millis();
 
     if (
-        now - lastReconnectAttemptMs <
+        !switchLiveConnection && now - lastReconnectAttemptMs <
         RECONNECT_INTERVAL_MS)
     {
         return;
     }
 
     lastReconnectAttemptMs = now;
-
-    tlsClient.stop();
 
     connect();
 }
@@ -608,6 +718,8 @@ bool MQTT::publishHeartbeat(const AppState &state)
 
     document["mqtt_connected"] =
         state.mqtt.connected;
+    document["mqtt_transport"] = state.mqtt.transport;
+    document["wifi_connected"] = WiFi.status() == WL_CONNECTED;
 
     if (state.temperature.valid)
     {
@@ -628,7 +740,7 @@ bool MQTT::publishHeartbeat(const AppState &state)
         state.cellular.operatorName;
 
     document["ip_address"] =
-        state.cellular.ipAddress;
+        usingWifi ? WiFi.localIP().toString() : state.cellular.ipAddress;
 
     document["firmware"] =
         FW_VERSION;
@@ -692,4 +804,72 @@ bool MQTT::publishBattery(float voltage)
         BATTERY_TOPIC,
         payload,
         true);
+}
+
+bool MQTT::publishLithiumBatteries(const AppState& state)
+{
+    if (!mqttClient.connected()) return false;
+    bool success = true;
+    const bool discoveryNeeded = !lithiumDiscoveryPublished_ ||
+        lithiumDiscoveryAddresses_[0] != state.lithium[0].address ||
+        lithiumDiscoveryAddresses_[1] != state.lithium[1].address;
+    const char* fields[] = {"charge_percent", "voltage", "current", "remaining_ah", "temperature_c"};
+    const char* names[] = {"Charge", "Voltage", "Current", "Remaining Charge", "Temperature"};
+    const char* classes[] = {"battery", "voltage", "current", "", "temperature"};
+    const char* units[] = {"%", "V", "A", "Ah", "\xC2\xB0" "C"};
+    for (int i = 0; i < 2; ++i)
+    {
+        const auto& battery = state.lithium[i];
+        String base = "rvmonitor/camper01/battery/" + String(i + 1);
+        const bool valid = batterySampleFresh(battery.valid, millis(), battery.updatedMs);
+        success &= mqttClient.publish((base + "/availability").c_str(), valid ? "online" : "offline", true);
+        JsonDocument telemetry;
+        telemetry["address"] = battery.address;
+        telemetry["valid"] = valid;
+        telemetry["model"] = battery.model;
+        telemetry["last_poll_error"] = battery.error;
+        if (valid)
+        {
+            telemetry["voltage"] = battery.voltage;
+            telemetry["current"] = battery.current;
+            telemetry["charge_percent"] = battery.remainingAh / battery.capacityAh * 100.0f;
+            telemetry["remaining_ah"] = battery.remainingAh;
+            telemetry["capacity_ah"] = battery.capacityAh;
+            telemetry["reading_age_seconds"] = (millis() - battery.updatedMs) / 1000UL;
+            if (battery.temperatureValid) telemetry["temperature_c"] = battery.temperatureC;
+        }
+        else telemetry["error"] = battery.error.isEmpty() ? "Reading is stale" : battery.error;
+        char payload[768];
+        size_t length = serializeJson(telemetry, payload, sizeof(payload));
+        success &= length > 0 && length < sizeof(payload) && mqttClient.publish((base + "/state").c_str(), payload, true);
+        // Retained discovery is resent after reconnects and assignment changes.
+        for (int f = 0; discoveryNeeded && f < 5; ++f)
+        {
+            JsonDocument config;
+            String unique = "camper01_battery_" + String(i + 1) + "_" + fields[f];
+            config["name"] = "Battery " + String(i + 1) + " " + names[f];
+            config["unique_id"] = unique;
+            config["state_topic"] = base + "/state";
+            config["value_template"] = "{{ value_json." + String(fields[f]) + " | default(none) }}";
+            config["unit_of_measurement"] = units[f];
+            if (classes[f][0]) config["device_class"] = classes[f];
+            config["state_class"] = "measurement";
+            config["expire_after"] = BATTERY_MAX_AGE_MS / 1000UL;
+            JsonArray availability = config["availability"].to<JsonArray>();
+            availability.add<JsonObject>()["topic"] = STATUS_TOPIC;
+            availability.add<JsonObject>()["topic"] = base + "/availability";
+            config["availability_mode"] = "all";
+            config["device"]["identifiers"][0] = "camper_monitor_01";
+            config["device"]["name"] = "Camper Monitor";
+            length = serializeJson(config, payload, sizeof(payload));
+            success &= length > 0 && length < sizeof(payload) && mqttClient.publish(
+                ("homeassistant/sensor/" + unique + "/config").c_str(), payload, true);
+        }
+    }
+    if (success && discoveryNeeded)
+    {
+        lithiumDiscoveryPublished_ = true;
+        for (int i = 0; i < 2; ++i) lithiumDiscoveryAddresses_[i] = state.lithium[i].address;
+    }
+    return success;
 }

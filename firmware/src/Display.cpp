@@ -480,6 +480,21 @@ void Display::renderSystem(
 
     drawHeader("System");
 
+    if (state.wifi.accessPointActive)
+    {
+        display.setCursor(0, 16);
+        display.print(state.wifi.accessPointSSID);
+        display.setCursor(0, 29);
+        display.print("Pass: Camper-");
+        display.print(state.wifi.accessPointSSID.substring(state.wifi.accessPointSSID.length() - 6));
+        display.setCursor(0, 42);
+        display.print(state.wifi.accessPointIP);
+        display.setCursor(0, 55);
+        display.print("Open /settings");
+        display.display();
+        return;
+    }
+
     display.setCursor(0, 16);
     display.print("Firmware");
 

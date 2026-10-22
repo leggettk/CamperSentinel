@@ -1,0 +1,102 @@
+# Requires Mushroom, installed through HACS. Paste into a Manual dashboard card.
+# Other entity IDs follow the existing standard card; adjust if HA renamed them.
+# Uses the current Mushroom Template Card API (color / vertical).
+type: grid
+title: Camper Batteries
+columns: 2
+square: false
+cards:
+  - type: custom:mushroom-template-card
+    entity: sensor.camper_monitor_battery_1_charge
+    vertical: true
+    multiline_secondary: true
+    primary: >-
+      {% if is_number(states(entity)) %}
+        Battery 1 · {{ states(entity) | float | round(0) | int }}%
+      {% else %}
+        Battery 1 · Unavailable
+      {% endif %}
+    icon: >-
+      {% set soc = states(entity) | float(-1) %}
+      {% if soc < 0 %} mdi:battery-unknown
+      {% elif soc >= 95 %} mdi:battery
+      {% elif soc >= 75 %} mdi:battery-80
+      {% elif soc >= 50 %} mdi:battery-60
+      {% elif soc >= 20 %} mdi:battery-30
+      {% else %} mdi:battery-alert
+      {% endif %}
+    color: >-
+      {% set soc = states(entity) | float(-1) %}
+      {% if soc < 0 %} disabled
+      {% elif soc < 20 %} red
+      {% elif soc < 50 %} amber
+      {% else %} green
+      {% endif %}
+    secondary: |-
+      {%- set base = 'sensor.camper_monitor_battery_1' -%}
+      {%- macro reading(suffix, places=1) -%}
+        {%- set id = base ~ suffix -%}
+        {%- if is_number(states(id)) -%}
+          {{ states(id) | float | round(places) }} {{ state_attr(id, 'unit_of_measurement') or '' }}
+        {%- else -%}
+          —
+        {%- endif -%}
+      {%- endmacro -%}
+      {% if is_number(states(entity)) -%}
+      Live readings
+      Voltage: {{ reading('_voltage', 2) }}
+      Current: {{ reading('_current', 2) }}
+      Remaining: {{ reading('_remaining_charge') }}
+      Temperature: {{ reading('_temperature') }}
+      {%- else -%}
+      Waiting for fresh battery data
+      {%- endif %}
+    tap_action:
+      action: more-info
+  - type: custom:mushroom-template-card
+    entity: sensor.camper_monitor_battery_2_charge
+    vertical: true
+    multiline_secondary: true
+    primary: >-
+      {% if is_number(states(entity)) %}
+        Battery 2 · {{ states(entity) | float | round(0) | int }}%
+      {% else %}
+        Battery 2 · Unavailable
+      {% endif %}
+    icon: >-
+      {% set soc = states(entity) | float(-1) %}
+      {% if soc < 0 %} mdi:battery-unknown
+      {% elif soc >= 95 %} mdi:battery
+      {% elif soc >= 75 %} mdi:battery-80
+      {% elif soc >= 50 %} mdi:battery-60
+      {% elif soc >= 20 %} mdi:battery-30
+      {% else %} mdi:battery-alert
+      {% endif %}
+    color: >-
+      {% set soc = states(entity) | float(-1) %}
+      {% if soc < 0 %} disabled
+      {% elif soc < 20 %} red
+      {% elif soc < 50 %} amber
+      {% else %} green
+      {% endif %}
+    secondary: |-
+      {%- set base = 'sensor.camper_monitor_battery_2' -%}
+      {%- macro reading(suffix, places=1) -%}
+        {%- set id = base ~ suffix -%}
+        {%- if is_number(states(id)) -%}
+          {{ states(id) | float | round(places) }} {{ state_attr(id, 'unit_of_measurement') or '' }}
+        {%- else -%}
+          —
+        {%- endif -%}
+      {%- endmacro -%}
+      {% if is_number(states(entity)) -%}
+      Live readings
+      Voltage: {{ reading('_voltage', 2) }}
+      Current: {{ reading('_current', 2) }}
+      Remaining: {{ reading('_remaining_charge') }}
+      Temperature: {{ reading('_temperature') }}
+      {%- else -%}
+      Waiting for fresh battery data
+      {%- endif %}
+    tap_action:
+      action: more-info

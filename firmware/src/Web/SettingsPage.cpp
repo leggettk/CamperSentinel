@@ -67,7 +67,7 @@ void SettingsPage::handleLanding()
         return;
     }
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -106,16 +106,14 @@ void SettingsPage::handleLanding()
         "Firmware",
         "View firmware details and install an OTA update.",
         "/ota");
+    page.addSettingsCard("Bluetooth Batteries", "Discover and assign two Renogy Pro batteries.", "/settings/batteries");
 
     page.addFooter(
         FW_VERSION,
         formatUptime(
             state_->system.uptimeSeconds));
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 void SettingsPage::handleAlerts()
 {
@@ -132,7 +130,7 @@ void SettingsPage::handleAlerts()
     const DeviceSettings& config =
         settings_->get();
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -197,10 +195,7 @@ void SettingsPage::handleAlerts()
                 ? state_->system.uptimeSeconds
                 : 0));
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 void SettingsPage::handleAlertsSave()
 {
@@ -307,7 +302,7 @@ void SettingsPage::handleReporting()
     const DeviceSettings& config =
         settings_->get();
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -367,10 +362,7 @@ void SettingsPage::handleReporting()
         formatUptime(
             state_->system.uptimeSeconds));
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 void SettingsPage::handleReportingSave()
 {
@@ -468,7 +460,7 @@ void SettingsPage::handleDevice()
     DeviceSettings& config =
         settings_->get();
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
     
     page.begin(
         FW_NAME,
@@ -530,10 +522,7 @@ page.endCard();
         "Back to Settings",
         "/settings");
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 void SettingsPage::handleDeviceSave()
 {
@@ -703,7 +692,7 @@ void SettingsPage::handleConnectivity()
     const DeviceSettings& config =
         settings_->get();
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -712,9 +701,11 @@ void SettingsPage::handleConnectivity()
 
     page.addNavigation("settings");
 
-    const bool restartRequired =
-    server_->hasArg("saved") ||
-    server_->hasArg("mqttSaved");
+    if (server_->hasArg("saved"))
+    {
+        page.addToast("Wi-Fi settings saved. Connecting automatically; the setup hotspot remains available until restart.");
+    }
+    const bool restartRequired = server_->hasArg("mqttSaved");
 
 if (restartRequired)
 {
@@ -738,6 +729,12 @@ if (restartRequired)
         StatusLevel::Warning);
 }
     page.beginCard("Current Status");
+    if (state_->wifi.accessPointActive)
+    {
+        page.addValue("Setup Wi-Fi", state_->wifi.accessPointSSID);
+        page.addValue("Setup Address", "http://" + state_->wifi.accessPointIP);
+        page.addValue("Setup", "Available until restart. Saved Wi-Fi credentials are applied automatically.");
+    }
 
     page.addStatus(
         "Wi-Fi",
@@ -866,10 +863,7 @@ page.endCard();
         formatUptime(
             state_->system.uptimeSeconds));
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 
 void SettingsPage::handleConnectivitySave()

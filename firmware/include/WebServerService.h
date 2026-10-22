@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include "ResponsiveWebServer.h"
 
 #include "AppState.h"
 #include "Logger.h"
@@ -27,7 +28,7 @@ public:
     bool running() const;
 
 private:
-    WebServer server_{80};
+    ResponsiveWebServer server_{80};
 
     DashboardPage dashboardPage_;
     SettingsPage settingsPage_;
@@ -35,6 +36,7 @@ private:
     DiagnosticsPage diagnosticsPage_;
 
     bool started_ = false;
+    AppState* state_ = nullptr;
 
     void registerRoutes();
     void handleNotFound();

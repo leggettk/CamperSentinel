@@ -24,7 +24,7 @@ void DiagnosticsPage::handle()
     const DeviceSettings& config =
         settings_->get();
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -66,6 +66,12 @@ void DiagnosticsPage::handle()
     page.endCard();
 
     page.beginCard("Wi-Fi");
+    page.addValue("Setup Access Point", state.wifi.accessPointActive ? "Active" : "Inactive");
+    if (state.wifi.accessPointActive)
+    {
+        page.addValue("Setup SSID", state.wifi.accessPointSSID);
+        page.addValue("Setup IP", state.wifi.accessPointIP);
+    }
 
     page.addStatus(
         "Status",
@@ -125,6 +131,7 @@ void DiagnosticsPage::handle()
     page.endCard();
 
     page.beginCard("MQTT");
+    page.addValue("Transport", state.mqtt.transport);
 
     page.addStatus(
         "Status",
@@ -222,10 +229,7 @@ else
 
 page.endCard();
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 
 String DiagnosticsPage::formatUptime(

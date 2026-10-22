@@ -27,7 +27,7 @@ void DashboardPage::handle()
             overallTitle,
             overallMessage);
 
-    WebPageBuilder page;
+    WebPageBuilder page(*server_);
 
     page.begin(
         FW_NAME,
@@ -79,6 +79,29 @@ void DashboardPage::handle()
             : StatusLevel::Critical);
 
     page.endGrid();
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const auto& battery = state.lithium[i];
+        page.beginCard("Renogy Battery " + String(i + 1));
+        page.addValue("Bluetooth Address", battery.address.isEmpty() ? "Not assigned" : battery.address);
+        page.addStatus("Readings", battery.valid ? "Available" : "Unavailable",
+            battery.valid ? StatusLevel::Normal : StatusLevel::Warning);
+        if (battery.valid)
+        {
+            page.addValue("Model", battery.model);
+            page.addValue("Charge", String(battery.remainingAh / battery.capacityAh * 100.0f, 1) + "%");
+            page.addValue("Voltage", String(battery.voltage, 1) + " V");
+            page.addValue("Current", String(battery.current, 2) + " A");
+            page.addValue("Remaining / Capacity", String(battery.remainingAh, 1) + " / " + String(battery.capacityAh, 1) + " Ah");
+            page.addValue("Temperature", battery.temperatureValid ? String(battery.temperatureC, 1) + " C" : "Unavailable");
+            page.addValue("Reading Age", String((millis() - battery.updatedMs) / 1000UL) + " s");
+            if (!battery.error.isEmpty()) page.addValue("Last Poll", battery.error);
+        }
+        else page.addValue("Details", battery.error.isEmpty() ? "Reading is stale" : battery.error);
+        page.addLink("Configure Bluetooth batteries", "/settings/batteries");
+        page.endCard();
+    }
 
     page.beginCard("Connectivity");
 
@@ -158,10 +181,7 @@ void DashboardPage::handle()
         formatUptime(
             state.system.uptimeSeconds));
 
-    server_->send(
-        200,
-        "text/html; charset=utf-8",
-        page.build());
+    page.send(*server_);
 }
 StatusLevel DashboardPage::determineOverallStatus(
     String& title,
