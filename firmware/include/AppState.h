@@ -8,13 +8,29 @@ struct TemperatureState
     bool valid = false;
 };
 
+
 struct PowerState
 {
+    // Existing camper battery monitoring
     float batteryVoltage = 0.0f;
     bool batteryVoltageValid = false;
 
     bool shorePowerPresent = false;
+
+    // Victron SmartShunt VE.Direct
+    struct
+    {
+        float voltage = 0.0f;
+        float current = 0.0f;
+        float soc = 0.0f;
+        int power = 0;
+
+        bool valid = false;
+        uint32_t updatedMs = 0;
+
+    } smartShunt;
 };
+
 
 struct WiFiState
 {

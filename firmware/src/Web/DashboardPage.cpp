@@ -80,6 +80,50 @@ void DashboardPage::handle()
 
     page.endGrid();
 
+    // Victron SmartShunt battery-bank monitoring
+    const auto& shunt = state.power.smartShunt;
+
+    page.beginCard("Victron SmartShunt");
+
+    page.addStatus(
+        "VE.Direct",
+        shunt.valid ? "Connected" : "Offline",
+        shunt.valid
+            ? StatusLevel::Normal
+            : StatusLevel::Warning);
+
+    if (shunt.valid)
+    {
+        page.addValue(
+            "Battery Voltage",
+            String(shunt.voltage, 3) + " V");
+
+        page.addValue(
+            "Battery Current",
+            String(shunt.current, 3) + " A");
+
+        page.addValue(
+            "State of Charge",
+            String(shunt.soc, 1) + "%");
+
+        page.addValue(
+            "Battery Power",
+            String(shunt.power) + " W");
+
+        page.addValue(
+            "Reading Age",
+            String((millis() - shunt.updatedMs) / 1000UL)
+                + " s");
+    }
+    else
+    {
+        page.addValue(
+            "Measurements",
+            "Waiting for valid SmartShunt data");
+    }
+
+    page.endCard();
+
     for (int i = 0; i < 2; ++i)
     {
         const auto& battery = state.lithium[i];

@@ -18,6 +18,8 @@
 #include "OTAService.h"
 #include "EventLog.h"
 #include "RenogyBatteries.h"
+#include "VEDirect.h"
+#include "Pins.h"
 
 Settings settings;
 AppState state;
@@ -427,6 +429,12 @@ else
 
     userButton.begin();
     renogyBatteries.begin();
+    vedirect.begin(PIN_VEDIRECT_RX);
+
+eventLog.add(
+    EventLevel::Info,
+    "SmartShunt VE.Direct receiver initialized"
+);
 
     if (!temp.begin())
     {
@@ -465,6 +473,50 @@ void loop()
     webServerService.update();
     mqtt.loop();
     renogyBatteries.update(state);
+    
+vedirect.update();
+
+// Keep SmartShunt communication status current.
+state.power.smartShunt.valid = vedirect.isValid();
+
+if (vedirect.hasNewData() && vedirect.isValid())
+{
+    auto& shunt = state.power.smartShunt;
+
+    shunt.voltage = vedirect.voltage();
+    shunt.current = vedirect.current();
+    shunt.soc = vedirect.stateOfCharge();
+    shunt.power = vedirect.power();
+    shunt.updatedMs = millis();
+
+    // Keep our existing five-second web event logging.
+    static unsigned long lastLogMs = 0;
+    const unsigned long nowMs = millis();
+
+    if (lastLogMs == 0 ||
+        nowMs - lastLogMs >= 5000UL)
+    {
+        lastLogMs = nowMs;
+
+        char message[128];
+
+        snprintf(
+            message,
+            sizeof(message),
+            "SmartShunt: %.3f V | %.3f A | %.1f%% SOC | %d W",
+            shunt.voltage,
+            shunt.current,
+            shunt.soc,
+            shunt.power
+        );
+
+        eventLog.add(
+            EventLevel::Info,
+            String(message)
+        );
+    }
+}
+
     static unsigned long lastLithiumPublish = 0;
     if (mqtt.isConnected() && now - lastLithiumPublish >= 30000UL)
     {
