@@ -1,0 +1,2436 @@
+diff --git a/firmware/.vscode/extensions.json b/firmware/.vscode/extensions.json
+index 080e70d..a91ca8f 100644
+--- a/firmware/.vscode/extensions.json
++++ b/firmware/.vscode/extensions.json
+@@ -5,6 +5,7 @@
+         "platformio.platformio-ide"
+     ],
+     "unwantedRecommendations": [
+-        "ms-vscode.cpptools-extension-pack"
++        "ms-vscode.cpptools-extension-pack",
++        "pioarduino.pioarduino-ide"
+     ]
+ }
+diff --git a/firmware/include/AppState.h b/firmware/include/AppState.h
+index e29f67e..2420f54 100644
+--- a/firmware/include/AppState.h
++++ b/firmware/include/AppState.h
+@@ -40,6 +40,11 @@ struct CellularState
+ struct MQTTState
+ {
+     bool connected = false;
++
++    int lastError = 0;
++
++    uint32_t connectionFailureCount = 0;
++    uint32_t lastConnectedTimeSeconds = 0;
+ };
+ 
+ struct AlarmState
+diff --git a/firmware/include/EventLog.h b/firmware/include/EventLog.h
+new file mode 100644
+index 0000000..65e3e14
+--- /dev/null
++++ b/firmware/include/EventLog.h
+@@ -0,0 +1,42 @@
++#pragma once
++
++#include <Arduino.h>
++
++enum class EventLevel
++{
++    Info,
++    Warning,
++    Error
++};
++
++struct EventEntry
++{
++    uint32_t uptimeSeconds = 0;
++    EventLevel level = EventLevel::Info;
++    String message;
++};
++
++class EventLog
++{
++public:
++    static constexpr size_t MAX_ENTRIES = 100;
++
++    void add(
++        EventLevel level,
++        const String& message);
++
++    size_t count() const;
++
++    const EventEntry& get(
++        size_t index) const;
++
++    void clear();
++
++private:
++    EventEntry entries_[MAX_ENTRIES];
++
++    size_t start_ = 0;
++    size_t count_ = 0;
++};
++
++extern EventLog eventLog;
+\ No newline at end of file
+diff --git a/firmware/include/Web/DiagnosticsPage.h b/firmware/include/Web/DiagnosticsPage.h
+new file mode 100644
+index 0000000..6558937
+--- /dev/null
++++ b/firmware/include/Web/DiagnosticsPage.h
+@@ -0,0 +1,28 @@
++#pragma once
++
++#include <Arduino.h>
++#include <WebServer.h>
++
++#include "AppState.h"
++#include "Settings.h"
++#include "WebPageBuilder.h"
++#include "EventLog.h"
++
++class DiagnosticsPage
++{
++public:
++    void begin(
++        WebServer& server,
++        AppState& state,
++        Settings& settings);
++
++    void handle();
++    void handleClearLog();
++private:
++    WebServer* server_ = nullptr;
++    AppState* state_ = nullptr;
++    Settings* settings_ = nullptr;
++    String eventLevelName(
++    EventLevel level) const;
++    String formatUptime(uint32_t seconds) const;
++};
+\ No newline at end of file
+diff --git a/firmware/include/Web/SettingsPage.h b/firmware/include/Web/SettingsPage.h
+index cb8eea0..76ec3e1 100644
+--- a/firmware/include/Web/SettingsPage.h
++++ b/firmware/include/Web/SettingsPage.h
+@@ -28,6 +28,12 @@ public:
+ 
+     void handleDevice();
+     void handleDeviceSave();
++
++    void handleConnectivity();
++    void handleConnectivitySave();
++
++    void handleMqttSave();
++
+     String formatUptime (uint32_t totalSeconds) const;
+ private:
+ 
+diff --git a/firmware/include/WebPageBuilder.h b/firmware/include/WebPageBuilder.h
+index ca102b7..62a4a02 100644
+--- a/firmware/include/WebPageBuilder.h
++++ b/firmware/include/WebPageBuilder.h
+@@ -74,7 +74,8 @@ public:
+         float maximum,
+         float step,
+         const String& unit = "",
+-        const String& description = "");
++        const String& description = "",
++        uint8_t decimals = 1);
+ 
+     void addCheckbox(
+         const String& label,
+@@ -96,7 +97,15 @@ public:
+     const String& value,
+     size_t maxLength,
+     const String& description = "");
+-
++    void addPasswordInput(
++    const String& label,
++    const String& name,
++    size_t maxLength,
++    const String& description = "");
++    void addActionButton(
++    const String& label,
++    const String& action,
++    bool danger = false);
+ private:
+     String html_;
+ 
+@@ -106,6 +115,7 @@ private:
+     bool formOpen_ = false;
+     void appendStyles();
+     
++    
+     String escapeHtml(const String& value) const;
+     String statusClass(StatusLevel level) const;
+     String statusLabel(StatusLevel level) const;
+diff --git a/firmware/include/WebServerService.h b/firmware/include/WebServerService.h
+index c454672..ea7ec5d 100644
+--- a/firmware/include/WebServerService.h
++++ b/firmware/include/WebServerService.h
+@@ -2,13 +2,16 @@
+ 
+ #include <Arduino.h>
+ #include <WebServer.h>
+-#include "Web/DashboardPage.h"
+-#include "Web/SettingsPage.h"
+-#include "Web/OTAPage.h"
++
+ #include "AppState.h"
+ #include "Logger.h"
+-#include "Settings.h"
+ #include "OTAService.h"
++#include "Settings.h"
++
++#include "Web/DashboardPage.h"
++#include "Web/SettingsPage.h"
++#include "Web/OTAPage.h"
++#include "Web/DiagnosticsPage.h"
+ 
+ class WebServerService
+ {
+@@ -20,27 +23,19 @@ public:
+         OTAService& otaService);
+ 
+     void update();
++
+     bool running() const;
+ 
+ private:
+     WebServer server_{80};
+-    OTAService* otaService_ = nullptr;
+-    Settings* settings_ = nullptr;
+-    AppState* appState_ = nullptr;
+-    Logger* logger_ = nullptr;
++
++    DashboardPage dashboardPage_;
+     SettingsPage settingsPage_;
++    OTAPage otaPage_;
++    DiagnosticsPage diagnosticsPage_;
++
+     bool started_ = false;
++
+     void registerRoutes();
+     void handleNotFound();
+-    void handleOtaPage();
+-    void handleOtaUpload();
+-    void handleOtaUploadComplete();
+-    // void handleSettings();
+-    void handleDeviceSettings();
+-    void handleDeviceSettingsSave();
+-    bool otaUploadStarted_ = false;
+-    bool otaUploadSuccessful_ = false;
+-    size_t otaBytesWritten_ = 0;
+-    DashboardPage dashboardPage_;
+-    OTAPage otaPage_;
+ };
+\ No newline at end of file
+diff --git a/firmware/include/settings.h b/firmware/include/settings.h
+index 848ad52..3b33e42 100644
+--- a/firmware/include/settings.h
++++ b/firmware/include/settings.h
+@@ -6,7 +6,7 @@
+ 
+ struct DeviceSettings
+ {
+-    static constexpr uint16_t CURRENT_VERSION = 1;
++    static constexpr uint16_t CURRENT_VERSION = 2;
+ 
+     uint16_t version = CURRENT_VERSION;
+ 
+@@ -19,14 +19,25 @@ struct DeviceSettings
+     String wifiSSID = "";
+     String wifiPassword = "";
+ 
++    // MQTT
++    bool mqttEnabled = true;
++    String mqttHost = "";
++    uint16_t mqttPort = 8883;
++    String mqttUsername = "";
++    String mqttPassword = "";
++    bool mqttTlsEnabled = true;
++
+     // Alerts
+     bool smsEnabled = true;
+     float tempAlarmHighF = DEFAULT_TEMP_ALARM_HIGH_F;
+     float tempAlarmResetF = DEFAULT_TEMP_ALARM_RESET_F;
+ 
+     // Publish timing, in seconds
+-    uint32_t heartbeatIntervalSeconds = DEFAULT_HEARTBEAT_INTERVAL_SECONDS;
+-    uint32_t temperaturePublishIntervalSeconds = DEFAULT_TEMPERATURE_PUBLISH_SECONDS;
++    uint32_t heartbeatIntervalSeconds =
++        DEFAULT_HEARTBEAT_INTERVAL_SECONDS;
++
++    uint32_t temperaturePublishIntervalSeconds =
++        DEFAULT_TEMPERATURE_PUBLISH_SECONDS;
+ };
+ 
+ class Settings
+diff --git a/firmware/src/EventLog.cpp b/firmware/src/EventLog.cpp
+new file mode 100644
+index 0000000..7879bfe
+--- /dev/null
++++ b/firmware/src/EventLog.cpp
+@@ -0,0 +1,74 @@
++#include "EventLog.h"
++
++EventLog eventLog;
++
++void EventLog::add(
++    EventLevel level,
++    const String& message)
++{
++    size_t index;
++
++    if (count_ < MAX_ENTRIES)
++    {
++        index =
++            (start_ + count_) %
++            MAX_ENTRIES;
++
++        count_++;
++    }
++    else
++    {
++        //
++        // Buffer is full.
++        // Overwrite the oldest entry.
++        //
++        index = start_;
++
++        start_ =
++            (start_ + 1) %
++            MAX_ENTRIES;
++    }
++
++    entries_[index].uptimeSeconds =
++        millis() / 1000UL;
++
++    entries_[index].level =
++        level;
++
++    entries_[index].message =
++        message;
++}
++
++size_t EventLog::count() const
++{
++    return count_;
++}
++
++const EventEntry& EventLog::get(
++    size_t index) const
++{
++    //
++    // index 0 = oldest entry
++    //
++    const size_t actualIndex =
++        (start_ + index) %
++        MAX_ENTRIES;
++
++    return entries_[actualIndex];
++}
++
++void EventLog::clear()
++{
++    for (size_t i = 0;
++         i < MAX_ENTRIES;
++         ++i)
++    {
++        entries_[i].message = "";
++        entries_[i].uptimeSeconds = 0;
++        entries_[i].level =
++            EventLevel::Info;
++    }
++
++    start_ = 0;
++    count_ = 0;
++}
+\ No newline at end of file
+diff --git a/firmware/src/Logger.cpp b/firmware/src/Logger.cpp
+index cfce619..c64704f 100644
+--- a/firmware/src/Logger.cpp
++++ b/firmware/src/Logger.cpp
+@@ -1,4 +1,5 @@
+ #include "Logger.h"
++#include "EventLog.h"
+ 
+  
+ 
+@@ -149,45 +150,43 @@ void Logger::errorf(const char *format, ...)
+  
+ 
+ void Logger::write(
+-
+     LogLevel level,
+-
+-    const String &message)
+-
++    const String& message)
+ {
+-
+     if (
+-
+         currentLevel == LogLevel::None ||
+-
+         static_cast<uint8_t>(level) <
+-
+             static_cast<uint8_t>(currentLevel))
+-
+     {
+-
+         return;
+-
+     }
+ 
+- 
+-
+-    const unsigned long seconds = millis() / 1000UL;
+-
+- 
+-
+-    Serial.print("[");
+-
+-    Serial.print(seconds);
+-
+-    Serial.print("s] [");
+-
+-    Serial.print(levelName(level));
++    writeSerial(
++        level,
++        message);
+ 
+-    Serial.print("] ");
++    switch (level)
++    {
++        case LogLevel::Warning:
++            eventLog.add(
++                EventLevel::Warning,
++                message);
++            break;
+ 
+-    Serial.println(message);
++        case LogLevel::Error:
++            eventLog.add(
++                EventLevel::Error,
++                message);
++            break;
+ 
++        case LogLevel::Debug:
++        case LogLevel::Info:
++        default:
++            eventLog.add(
++                EventLevel::Info,
++                message);
++            break;
++    }
+ }
+ 
+  
+@@ -266,4 +265,56 @@ const char *Logger::levelName(LogLevel level) const
+ 
+     return "UNKNOWN";
+ 
++}
++void Logger::telemetry(
++    const String& message)
++{
++    writeSerial(
++        LogLevel::Info,
++        message);
++}
++
++void Logger::telemetryf(
++    const char* format,
++    ...)
++{
++    char buffer[192];
++
++    va_list arguments;
++    va_start(arguments, format);
++
++    vsnprintf(
++        buffer,
++        sizeof(buffer),
++        format,
++        arguments);
++
++    va_end(arguments);
++
++    writeSerial(
++        LogLevel::Info,
++        String(buffer));
++}
++
++void Logger::writeSerial(
++    LogLevel level,
++    const String& message)
++{
++    if (
++        currentLevel == LogLevel::None ||
++        static_cast<uint8_t>(level) <
++            static_cast<uint8_t>(currentLevel))
++    {
++        return;
++    }
++
++    const unsigned long seconds =
++        millis() / 1000UL;
++
++    Serial.print("[");
++    Serial.print(seconds);
++    Serial.print("s] [");
++    Serial.print(levelName(level));
++    Serial.print("] ");
++    Serial.println(message);
+ }
+\ No newline at end of file
+diff --git a/firmware/src/Logger.h b/firmware/src/Logger.h
+index f3a8917..9f92342 100644
+--- a/firmware/src/Logger.h
++++ b/firmware/src/Logger.h
+@@ -59,7 +59,8 @@ public:
+     void warningf(const char *format, ...);
+ 
+     void errorf(const char *format, ...);
+-
++    void telemetry(const String& message);
++    void telemetryf(const char* format, ...);
+  
+ 
+ private:
+@@ -77,7 +78,10 @@ private:
+  
+ 
+     const char *levelName(LogLevel level) const;
+-
++    
++    void writeSerial(
++    LogLevel level,
++    const String& message);
+  
+ 
+     LogLevel currentLevel = LogLevel::Info;
+diff --git a/firmware/src/MQTT.cpp b/firmware/src/MQTT.cpp
+index 5e9916b..e9fe271 100644
+--- a/firmware/src/MQTT.cpp
++++ b/firmware/src/MQTT.cpp
+@@ -3,12 +3,11 @@
+ #include <PubSubClient.h>
+ #include <SSLClient.h>
+ #include <TinyGsmClient.h>
+-
++#include "Secrets.h"
+ #include "Logger.h"
+ #include "Modem.h"
+ #include "MQTT.h"
+ #include "Pins.h"
+-#include "Secrets.h"
+ #include "TrustAnchors.h"
+ #include "Version.h"
+ 
+@@ -60,9 +59,34 @@ constexpr char UPTIME_DISCOVERY_TOPIC[] =
+     "homeassistant/sensor/camper01_uptime/config";
+ }
+ 
+-bool MQTT::begin()
++bool MQTT::begin(
++    Settings& settings,
++    AppState& state)
+ {
+-    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
++    settings_ = &settings;
++    state_ = &state;
++
++    const DeviceSettings& config =
++        settings_->get();
++
++    if (!config.mqttEnabled)
++    {
++        logger.info(
++            "MQTT disabled in settings");
++
++        return true;
++    }
++
++    if (config.mqttHost.isEmpty())
++    {
++        logger.warning(
++            "MQTT broker is not configured");
++
++        return false;
++    }
++
++    // Existing MQTT initialization continues...
++    mqttClient.setServer(config.mqttHost.c_str(),config.mqttPort);
+     mqttClient.setKeepAlive(60);
+     mqttClient.setSocketTimeout(30);
+     mqttClient.setBufferSize(1024);
+@@ -72,60 +96,123 @@ bool MQTT::begin()
+ 
+ bool MQTT::connect()
+ {
++    if (settings_ == nullptr)
++    {
++        logger.error(
++            "MQTT connect failed: settings unavailable");
++
++        return false;
++    }
++
++    const DeviceSettings& config =
++        settings_->get();
++
++    String clientId =
++        config.hostname + "-mqtt";
++
++    if (!config.mqttEnabled)
++    {
++        return false;
++    }
++
++    if (config.mqttHost.isEmpty())
++    {
++        logger.warning(
++            "MQTT connect skipped: broker not configured");
++
++        return false;
++    }
++
+     if (!cellular.isDataConnected())
+     {
+-        logger.warning("MQTT skipped: packet data is offline");
++        logger.warning(
++            "MQTT skipped: packet data is offline");
++
+         return false;
+     }
++
+     tlsClient.stop();
+ 
+     logger.infof(
+         "Connecting to MQTT TLS broker %s:%u",
+-        MQTT_HOST,
+-        static_cast<unsigned int>(MQTT_PORT));
+-
+-    const bool connected = mqttClient.connect(
+-        MQTT_CLIENT_ID,
+-        MQTT_USER,
+-        MQTT_PASSWORD,
+-        STATUS_TOPIC,
+-        1,
+-        true,
+-        "offline");
++        config.mqttHost.c_str(),
++        static_cast<unsigned int>(
++            config.mqttPort));
++
++    const bool connected =
++        mqttClient.connect(
++            clientId.c_str(),
++            config.mqttUsername.c_str(),
++            config.mqttPassword.c_str(),
++            STATUS_TOPIC,
++            1,
++            true,
++            "offline");
+ 
+     if (!connected)
+     {
++        const int mqttState =
++        mqttClient.state();
++
++        if (state_ != nullptr)
++        {
++        state_->mqtt.connected = false;
++        state_->mqtt.lastError = mqttState;
++        state_->mqtt.connectionFailureCount++;
++        }
+         logger.errorf(
+             "MQTT connection failed, state=%d",
+             mqttClient.state());
+ 
+         tlsClient.stop();
++
+         return false;
+     }
+-    if (!discoveryPublished)
+-    {
+-            if (publishDiscovery())
+-            {
+-                discoveryPublished = true;
+-            }
+-    }
++
+     mqttClient.publish(
+         STATUS_TOPIC,
+         "online",
+         true);
+ 
+-    logger.info("MQTT TLS connected");
++    logger.info(
++        "MQTT TLS connected");
++    
++    if (state_ != nullptr)
++    {
++    state_->mqtt.connected = true;
++    state_->mqtt.lastError = 0;
++
++    state_->mqtt.lastConnectedTimeSeconds =
++        millis() / 1000UL;
++    }
+ 
+-    if (!publishDiscovery())
++    if (!discoveryPublished)
+     {
+-        logger.warning(
+-        "Ambient discovery publish failed");
++        if (publishDiscovery())
++        {
++            discoveryPublished = true;
++        }
+     }
++
+     return true;
+ }
+ 
+ void MQTT::loop()
+ {
++    if (settings_ == nullptr)
++    {
++        return;
++    }
++
++    const DeviceSettings& config =
++        settings_->get();
++        
++    
++    if (!config.mqttEnabled)
++    {
++        return;
++    }
++    
+     if (mqttClient.connected())
+     {
+         mqttClient.loop();
+diff --git a/firmware/src/MQTT.h b/firmware/src/MQTT.h
+index 67bcdcc..e66f7ca 100644
+--- a/firmware/src/MQTT.h
++++ b/firmware/src/MQTT.h
+@@ -1,9 +1,12 @@
+ #pragma once
+ #include "AppState.h"
++#include "settings.h"
+ class MQTT
+ {
+ public:
+-    bool begin();
++    bool begin(
++        Settings& settings,
++        AppState& state);
+     void loop();
+ 
+     bool isConnected() const;
+@@ -13,6 +16,8 @@ public:
+     bool publishHeartbeat(const AppState &state);
+ 
+ private:
++    AppState* state_ = nullptr;
++    Settings* settings_ = nullptr;
+     bool connect();
+     bool publishDiscovery();
+     bool discoveryPublished = false;
+@@ -22,6 +27,7 @@ private:
+     bool publishShorePowerDiscovery();
+     bool publishSignalDiscovery();
+     bool publishUptimeDiscovery();
++    
+ 
+     static constexpr unsigned long RECONNECT_INTERVAL_MS = 30000UL;
+ };
+diff --git a/firmware/src/Web/DiagnosticsPage.cpp b/firmware/src/Web/DiagnosticsPage.cpp
+new file mode 100644
+index 0000000..8a58672
+--- /dev/null
++++ b/firmware/src/Web/DiagnosticsPage.cpp
+@@ -0,0 +1,303 @@
++#include "Web/DiagnosticsPage.h"
++#include "Version.h"
++#include "EventLog.h"
++
++void DiagnosticsPage::begin(
++    WebServer& server,
++    AppState& state,
++    Settings& settings)
++{
++    server_ = &server;
++    state_ = &state;
++    settings_ = &settings;
++}
++void DiagnosticsPage::handle()
++{
++    if (server_ == nullptr ||
++        state_ == nullptr ||
++        settings_ == nullptr)
++    {
++        return;
++    }
++
++    const AppState& state = *state_;
++    const DeviceSettings& config =
++        settings_->get();
++
++    WebPageBuilder page;
++
++    page.begin(
++        FW_NAME,
++        "Diagnostics",
++        "Detailed Camper Sentinel system information.",
++        5);
++
++    page.addNavigation("diagnostics");
++
++    page.beginCard("System");
++
++    page.addValue(
++        "Firmware",
++        FW_VERSION);
++
++    page.addValue(
++        "Build",
++        String(__DATE__) + " " + __TIME__);
++
++    page.addValue(
++        "Uptime",
++        formatUptime(
++            state.system.uptimeSeconds));
++
++    page.addValue(
++        "Free Heap",
++        String(
++            state.system.freeHeap / 1024.0f,
++            1) + " KB");
++
++    page.addValue(
++        "ESP32",
++        ESP.getChipModel());
++
++    page.addValue(
++        "CPU",
++        String(ESP.getCpuFreqMHz()) + " MHz");
++
++    page.endCard();
++
++    page.beginCard("Wi-Fi");
++
++    page.addStatus(
++        "Status",
++        state.wifi.connected
++            ? "Connected"
++            : "Disconnected",
++        state.wifi.connected
++            ? StatusLevel::Normal
++            : StatusLevel::Warning);
++
++    page.addValue(
++        "SSID",
++        state.wifi.ssid);
++
++    page.addValue(
++        "IP Address",
++        state.wifi.ipAddress);
++
++    page.addValue(
++        "RSSI",
++        String(state.wifi.rssi) + " dBm");
++
++    page.endCard();
++
++    page.beginCard("Cellular");
++
++    page.addStatus(
++        "Network",
++        state.cellular.networkConnected
++            ? "Connected"
++            : "Disconnected",
++        state.cellular.networkConnected
++            ? StatusLevel::Normal
++            : StatusLevel::Warning);
++
++    page.addStatus(
++        "Packet Data",
++        state.cellular.dataConnected
++            ? "Connected"
++            : "Disconnected",
++        state.cellular.dataConnected
++            ? StatusLevel::Normal
++            : StatusLevel::Warning);
++
++    page.addValue(
++        "Operator",
++        state.cellular.operatorName);
++
++    page.addValue(
++        "IP Address",
++        state.cellular.ipAddress);
++
++    page.addValue(
++        "Signal Quality",
++        String(state.cellular.signalQuality));
++
++    page.endCard();
++
++    page.beginCard("MQTT");
++
++    page.addStatus(
++        "Status",
++        state.mqtt.connected
++            ? "Connected"
++            : "Disconnected",
++        state.mqtt.connected
++            ? StatusLevel::Normal
++            : StatusLevel::Warning);
++
++    page.addValue(
++        "Broker",
++        config.mqttHost);
++
++    page.addValue(
++        "Port",
++        String(config.mqttPort));
++
++    page.addValue(
++        "TLS",
++        config.mqttTlsEnabled
++            ? "Enabled"
++            : "Disabled");
++
++    page.addValue(
++        "Client ID",
++        config.hostname + "-mqtt");
++
++    page.addValue(
++        "Last Error",
++        String(state.mqtt.lastError));
++
++    page.addValue(
++        "Connection Failures",
++        String(state.mqtt.connectionFailureCount));
++
++    page.addValue(
++        "Connected At Uptime",
++        state.mqtt.lastConnectedTimeSeconds > 0
++            ? formatUptime(
++                state.mqtt.lastConnectedTimeSeconds)
++            : "Never");
++
++    page.endCard();
++
++    page.beginCard("Recent Events");
++
++const size_t totalEvents =
++    eventLog.count();
++
++if (totalEvents == 0)
++{
++    page.addValue(
++        "Status",
++        "No events recorded");
++}
++else
++{
++    constexpr size_t MAX_DISPLAY_EVENTS = 25;
++
++    const size_t eventsToShow =
++        totalEvents < MAX_DISPLAY_EVENTS
++            ? totalEvents
++            : MAX_DISPLAY_EVENTS;
++
++    for (size_t i = 0;
++         i < eventsToShow;
++         ++i)
++    {
++        //
++        // EventLog index 0 is oldest.
++        // Display newest first.
++        //
++        const size_t eventIndex =
++            totalEvents - 1 - i;
++
++        const EventEntry& entry =
++            eventLog.get(eventIndex);
++
++        String label =
++            formatUptime(
++                entry.uptimeSeconds);
++
++        String value =
++            "[" +
++            eventLevelName(entry.level) +
++            "] " +
++            entry.message;
++
++        page.addValue(
++            label,
++            value);
++    }
++}
++
++page.endCard();
++
++    server_->send(
++        200,
++        "text/html; charset=utf-8",
++        page.build());
++}
++
++String DiagnosticsPage::formatUptime(
++    uint32_t totalSeconds) const
++{
++    const uint32_t days =
++        totalSeconds / 86400UL;
++
++    totalSeconds %= 86400UL;
++
++    const uint8_t hours =
++        totalSeconds / 3600UL;
++
++    totalSeconds %= 3600UL;
++
++    const uint8_t minutes =
++        totalSeconds / 60UL;
++
++    const uint8_t seconds =
++        totalSeconds % 60UL;
++
++    char buffer[40];
++
++    snprintf(
++        buffer,
++        sizeof(buffer),
++        "%lu d %02u:%02u:%02u",
++        static_cast<unsigned long>(days),
++        hours,
++        minutes,
++        seconds);
++
++    return String(buffer);
++}
++String DiagnosticsPage::eventLevelName(
++    EventLevel level) const
++{
++    switch (level)
++    {
++        case EventLevel::Info:
++            return "INFO";
++
++        case EventLevel::Warning:
++            return "WARN";
++
++        case EventLevel::Error:
++            return "ERROR";
++    }
++
++    return "UNKNOWN";
++}
++void DiagnosticsPage::handleClearLog()
++{
++    if (server_ == nullptr)
++    {
++        return;
++    }
++
++    eventLog.clear();
++
++    //
++    // Don't use logger.info() here.
++    // That would immediately put an entry
++    // back into the log we just cleared.
++    //
++
++    server_->sendHeader(
++        "Location",
++        "/diagnostics?logCleared=1");
++
++    server_->send(
++        303,
++        "text/plain",
++        "");
++}
+\ No newline at end of file
+diff --git a/firmware/src/Web/SettingsPage.cpp b/firmware/src/Web/SettingsPage.cpp
+index a32934b..e9d3ade 100644
+--- a/firmware/src/Web/SettingsPage.cpp
++++ b/firmware/src/Web/SettingsPage.cpp
+@@ -469,6 +469,14 @@ void SettingsPage::handleDevice()
+         settings_->get();
+ 
+     WebPageBuilder page;
++    
++    page.begin(
++        FW_NAME,
++        "Device Settings",
++        "Identity and general configuration.");
++
++    page.addNavigation("settings");
++
+     if (server_->hasArg("saved"))
+ {
+     if (server_->hasArg("restart"))
+@@ -484,45 +492,15 @@ void SettingsPage::handleDevice()
+             StatusLevel::Normal);
+     }
+ }
+-    page.begin(
+-        PROJECT_NAME,
+-        "Device Settings",
+-        "Identity and general configuration.");
+-    
++
++    page.beginCard("Device");
++
+     page.beginForm(
+     "/settings/device",
+     "POST");
+-    page.addNavigation("settings");
+-
+-    page.addHealthBanner(
+-    "Camper Sentinel settings",
+-    "Changes are stored on the device and remain available after a restart.",
+-    StatusLevel::Neutral);
+ 
+-    page.addSettingsCard(
+-    "Alerts",
+-    "Temperature thresholds, shore-power alerts, and SMS notifications.",
+-    "/settings/alerts");
+-
+-page.addSettingsCard(
+-    "Reporting",
+-    "Control telemetry publishing and heartbeat timing.",
+-    "/settings/reporting");
+-
+-page.addSettingsCard(
+-    "Device",
+-    "Change the device name, hostname, and general behavior.",
+-    "/settings/device");
+-
+-page.addSettingsCard(
+-    "Connectivity",
+-    "Manage Wi-Fi, MQTT, and cellular preferences.",
+-    "/settings/connectivity");
+-
+-page.addSettingsCard(
+-    "Firmware",
+-    "View firmware details and install an OTA update.",
+-    "/ota");
++    
++    
+ page.addTextInput(
+     "Device Name",
+     "deviceName",
+@@ -547,6 +525,7 @@ page.addCheckbox(
+     "Save Settings");
+ 
+ page.endForm();
++page.endCard();
+     page.addLink(
+         "Back to Settings",
+         "/settings");
+@@ -711,3 +690,421 @@ void SettingsPage::handleDeviceSave()
+         "text/plain",
+         "");
+ }
++
++void SettingsPage::handleConnectivity()
++{
++    if (server_ == nullptr ||
++        settings_ == nullptr ||
++        state_ == nullptr)
++    {
++        return;
++    }
++
++    const DeviceSettings& config =
++        settings_->get();
++
++    WebPageBuilder page;
++
++    page.begin(
++        FW_NAME,
++        "Connectivity Settings",
++        "Configure Wi-Fi and view network status.");
++
++    page.addNavigation("settings");
++
++    const bool restartRequired =
++    server_->hasArg("saved") ||
++    server_->hasArg("mqttSaved");
++
++if (restartRequired)
++{
++    page.beginCard("Apply Changes");
++
++    page.addHealthBanner(
++        "Restart required",
++        "Restart Camper Sentinel to apply the new connectivity settings.",
++        StatusLevel::Warning);
++
++    page.addActionButton(
++        "Restart Now",
++        "/restart");
++
++    page.endCard();
++}
++    if (server_->hasArg("mqttSaved"))
++{
++    page.addToast(
++        "MQTT settings saved. Restart Camper Sentinel to apply the changes.",
++        StatusLevel::Warning);
++}
++    page.beginCard("Current Status");
++
++    page.addStatus(
++        "Wi-Fi",
++        state_->wifi.connected
++            ? "Connected"
++            : "Disconnected",
++        state_->wifi.connected
++            ? StatusLevel::Normal
++            : StatusLevel::Warning);
++
++    if (state_->wifi.connected)
++    {
++        page.addValue(
++            "SSID",
++            state_->wifi.ssid);
++
++        page.addValue(
++            "IP Address",
++            state_->wifi.ipAddress);
++
++        page.addValue(
++            "Signal",
++            String(state_->wifi.rssi) + " dBm");
++    }
++
++    page.endCard();
++
++    page.beginCard("Wi-Fi Configuration");
++
++    page.beginForm(
++        "/settings/connectivity",
++        "POST");
++
++    page.addCheckbox(
++        "Enable Wi-Fi",
++        "wifiEnabled",
++        config.wifiEnabled,
++        "Enable local dashboard access and OTA updates.");
++
++    page.addTextInput(
++        "Wi-Fi SSID",
++        "wifiSSID",
++        config.wifiSSID,
++        32,
++        "Network name Camper Sentinel should connect to.");
++
++    page.addPasswordInput(
++        "Wi-Fi Password",
++        "wifiPassword",
++        64,
++        "Leave blank to keep the currently saved password.");
++
++    page.addSubmitButton(
++        "Save Settings");
++
++    page.endForm();
++
++    page.addSettingsFormScript();
++
++    page.endCard();
++
++    page.beginCard("MQTT Configuration");
++
++page.beginForm(
++    "/settings/connectivity/mqtt",
++    "POST");
++
++page.addCheckbox(
++    "Enable MQTT",
++    "mqttEnabled",
++    config.mqttEnabled,
++    "Enable remote telemetry and heartbeat publishing.");
++
++page.addTextInput(
++    "Broker",
++    "mqttHost",
++    config.mqttHost,
++    128,
++    "Hostname or IP address of the MQTT broker.");
++
++page.addNumberInput(
++    "Port",
++    "mqttPort",
++    config.mqttPort,
++    1,
++    65535,
++    1,
++    "",
++    "MQTT broker port. TLS commonly uses port 8883.",
++    0);
++
++page.addTextInput(
++    "Username",
++    "mqttUsername",
++    config.mqttUsername,
++    64,
++    "Username used to authenticate with the MQTT broker.");
++
++page.addPasswordInput(
++    "Password",
++    "mqttPassword",
++    128,
++    "Leave blank to keep the currently saved password.");
++
++page.addCheckbox(
++    "Enable TLS",
++    "mqttTlsEnabled",
++    config.mqttTlsEnabled,
++    "Use an encrypted connection to the MQTT broker.");
++
++page.addSubmitButton(
++    "Save MQTT Settings");
++
++page.endForm();
++
++page.addSettingsFormScript();
++
++page.endCard();
++
++    page.addLink(
++        "Back to Settings",
++        "/settings");
++
++    page.addFooter(
++        FW_VERSION,
++        formatUptime(
++            state_->system.uptimeSeconds));
++
++    server_->send(
++        200,
++        "text/html; charset=utf-8",
++        page.build());
++}
++
++void SettingsPage::handleConnectivitySave()
++{
++    if (server_ == nullptr ||
++        settings_ == nullptr)
++    {
++        return;
++    }
++
++    if (!server_->hasArg("wifiSSID"))
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "Wi-Fi SSID is missing.");
++
++        return;
++    }
++
++    String ssid =
++        server_->arg("wifiSSID");
++
++    String password =
++        server_->arg("wifiPassword");
++
++    ssid.trim();
++
++    if (ssid.length() > 32)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "Wi-Fi SSID must be 32 characters or fewer.");
++
++        return;
++    }
++
++    if (password.length() > 64)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "Wi-Fi password is too long.");
++
++        return;
++    }
++
++    DeviceSettings& config =
++        settings_->get();
++
++    config.wifiEnabled =
++        server_->hasArg("wifiEnabled");
++
++    config.wifiSSID =
++        ssid;
++
++    // Blank means keep the existing password.
++    if (password.length() > 0)
++    {
++        config.wifiPassword =
++            password;
++    }
++
++    if (!settings_->save())
++    {
++        if (logger_ != nullptr)
++        {
++            logger_->error(
++                "Failed to save connectivity settings");
++        }
++
++        server_->send(
++            500,
++            "text/plain; charset=utf-8",
++            "Failed to save connectivity settings.");
++
++        return;
++    }
++
++    if (logger_ != nullptr)
++    {
++        logger_->info(
++            String("Wi-Fi settings saved: SSID=") +
++            config.wifiSSID +
++            ", WiFi=" +
++            (config.wifiEnabled
++                ? "enabled"
++                : "disabled"));
++    }
++
++    server_->sendHeader(
++        "Location",
++        "/settings/connectivity?saved=1");
++
++    server_->send(
++        303,
++        "text/plain",
++        "");
++}
++void SettingsPage::handleMqttSave()
++{
++    if (server_ == nullptr ||
++        settings_ == nullptr)
++    {
++        return;
++    }
++
++    if (!server_->hasArg("mqttHost") ||
++        !server_->hasArg("mqttPort"))
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "Required MQTT settings are missing.");
++
++        return;
++    }
++
++    String host =
++        server_->arg("mqttHost");
++
++    String username =
++        server_->arg("mqttUsername");
++
++    String password =
++        server_->arg("mqttPassword");
++
++    host.trim();
++    username.trim();
++
++    const long port =
++        server_->arg("mqttPort").toInt();
++
++    if (host.length() > 128)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "MQTT broker hostname is too long.");
++
++        return;
++    }
++
++    if (port < 1 ||
++        port > 65535)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "MQTT port must be between 1 and 65535.");
++
++        return;
++    }
++
++    if (username.length() > 64)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "MQTT username is too long.");
++
++        return;
++    }
++
++    if (password.length() > 128)
++    {
++        server_->send(
++            400,
++            "text/plain; charset=utf-8",
++            "MQTT password is too long.");
++
++        return;
++    }
++
++    DeviceSettings& config =
++        settings_->get();
++
++    config.mqttEnabled =
++        server_->hasArg("mqttEnabled");
++
++    config.mqttHost =
++        host;
++
++    config.mqttPort =
++        static_cast<uint16_t>(port);
++
++    config.mqttUsername =
++        username;
++
++    config.mqttTlsEnabled =
++        server_->hasArg("mqttTlsEnabled");
++
++    // Blank means preserve the currently stored password.
++    if (!password.isEmpty())
++    {
++        config.mqttPassword =
++            password;
++    }
++
++    if (!settings_->save())
++    {
++        if (logger_ != nullptr)
++        {
++            logger_->error(
++                "Failed to save MQTT settings");
++        }
++
++        server_->send(
++            500,
++            "text/plain; charset=utf-8",
++            "Failed to save MQTT settings.");
++
++        return;
++    }
++
++    if (logger_ != nullptr)
++    {
++        logger_->info(
++            String("MQTT settings saved: host=") +
++            config.mqttHost +
++            ", port=" +
++            String(config.mqttPort) +
++            ", TLS=" +
++            (config.mqttTlsEnabled
++                ? "enabled"
++                : "disabled"));
++    }
++
++    server_->sendHeader(
++        "Location",
++        "/settings/connectivity?mqttSaved=1");
++
++    server_->send(
++        303,
++        "text/plain",
++        "");
++}
+\ No newline at end of file
+diff --git a/firmware/src/WebPageBuilder.cpp b/firmware/src/WebPageBuilder.cpp
+index 41601d6..8b270b4 100644
+--- a/firmware/src/WebPageBuilder.cpp
++++ b/firmware/src/WebPageBuilder.cpp
+@@ -669,6 +669,43 @@ void WebPageBuilder::appendStyles()
+             padding: 17px;
+         }
+     }
++    .action-form {
++    margin: 16px 0 0;
++}
++
++.action-button {
++    display: block;
++    width: 100%;
++    padding: 14px 18px;
++
++    color: #ffffff;
++    background: var(--accent);
++
++    border: none;
++    border-radius: 10px;
++
++    font: inherit;
++    font-size: 1rem;
++    font-weight: 750;
++
++    cursor: pointer;
++
++    transition:
++        filter 0.15s ease,
++        transform 0.15s ease;
++}
++
++.action-button:hover {
++    filter: brightness(1.08);
++}
++
++.action-button:active {
++    transform: scale(0.99);
++}
++
++.action-button.danger {
++    background: var(--critical);
++}
+ </style>
+ )rawliteral");
+ }
+@@ -974,7 +1011,8 @@ void WebPageBuilder::addNumberInput(
+     float maximum,
+     float step,
+     const String& unit,
+-    const String& description)
++    const String& description,
++    uint8_t decimals)
+ {
+     if (!formOpen_)
+     {
+@@ -999,7 +1037,9 @@ void WebPageBuilder::addNumberInput(
+     html_ += F("<input type=\"number\" name=\"");
+     html_ += escapeHtml(name);
+     html_ += F("\" value=\"");
+-    html_ += String(value, 1);
++    html_ += String(
++        value,
++        static_cast<unsigned int>(decimals));
+     html_ += F("\" min=\"");
+     html_ += String(minimum, 1);
+     html_ += F("\" max=\"");
+@@ -1272,4 +1312,69 @@ document.addEventListener("DOMContentLoaded", function () {
+ });
+ </script>
+ )rawliteral");
++}
++
++void WebPageBuilder::addPasswordInput(
++    const String& label,
++    const String& name,
++    size_t maxLength,
++    const String& description)
++{
++    if (!formOpen_)
++    {
++        return;
++    }
++
++    html_ += F("<label class=\"form-group\">");
++
++    html_ += F("<span class=\"form-label\">");
++    html_ += escapeHtml(label);
++    html_ += F("</span>");
++
++    if (description.length() > 0)
++    {
++        html_ += F("<span class=\"form-description\">");
++        html_ += escapeHtml(description);
++        html_ += F("</span>");
++    }
++
++    html_ += F("<input type=\"password\" ");
++
++    html_ += F("name=\"");
++    html_ += escapeHtml(name);
++    html_ += F("\" ");
++
++    html_ += F("value=\"\" ");
++
++    html_ += F("maxlength=\"");
++    html_ += String(maxLength);
++    html_ += F("\" ");
++
++    html_ += F("autocomplete=\"new-password\" ");
++    html_ += F("class=\"text-input\">");
++
++    html_ += F("</label>");
++}
++void WebPageBuilder::addActionButton(
++    const String& label,
++    const String& action,
++    bool danger)
++{
++    html_ += F("<form class=\"action-form\" method=\"POST\" action=\"");
++    html_ += escapeHtml(action);
++    html_ += F("\">");
++
++    html_ += F("<button class=\"action-button");
++
++    if (danger)
++    {
++        html_ += F(" danger");
++    }
++
++    html_ += F("\" type=\"submit\">");
++
++    html_ += escapeHtml(label);
++
++    html_ += F("</button>");
++    html_ += F("</form>");
+ }
+\ No newline at end of file
+diff --git a/firmware/src/WebServerService.cpp b/firmware/src/WebServerService.cpp
+index 03c7e6e..b32b0b9 100644
+--- a/firmware/src/WebServerService.cpp
++++ b/firmware/src/WebServerService.cpp
+@@ -1,54 +1,6 @@
+ #include "WebServerService.h"
+ #include "WebPageBuilder.h"
+-#include "Constants.h"
+-#include "Web/DashboardPage.h"
+-#include <Update.h>
+ 
+-DashboardPage dashboardPage_;
+-static String formatUptimeValue(uint32_t totalSeconds)
+-{
+-    const uint32_t days =
+-        totalSeconds / 86400UL;
+-
+-    totalSeconds %= 86400UL;
+-
+-    const uint8_t hours =
+-        totalSeconds / 3600UL;
+-
+-    totalSeconds %= 3600UL;
+-
+-    const uint8_t minutes =
+-        totalSeconds / 60UL;
+-
+-    const uint8_t seconds =
+-        totalSeconds % 60UL;
+-
+-    char buffer[40];
+-
+-    if (days > 0)
+-    {
+-        snprintf(
+-            buffer,
+-            sizeof(buffer),
+-            "%lu d %02u:%02u:%02u",
+-            static_cast<unsigned long>(days),
+-            hours,
+-            minutes,
+-            seconds);
+-    }
+-    else
+-    {
+-        snprintf(
+-            buffer,
+-            sizeof(buffer),
+-            "%02u:%02u:%02u",
+-            hours,
+-            minutes,
+-            seconds);
+-    }
+-
+-    return String(buffer);
+-}
+ 
+ bool WebServerService::begin(
+     Settings& settings,
+@@ -60,11 +12,7 @@ bool WebServerService::begin(
+     {
+         return true;
+     }
+-    otaService_ = &otaService;
+-    settings_ = &settings;
+-    appState_ = &appState;
+-    logger_ = &logger;
+-
++    
+     dashboardPage_.begin(
+     server_,
+     appState);
+@@ -81,12 +29,17 @@ bool WebServerService::begin(
+     logger,
+     otaService);
+ 
++    diagnosticsPage_.begin(
++        server_,
++        appState,
++        settings);
++
+     registerRoutes();
+ 
+     server_.begin();
+     started_ = true;
+ 
+-    logger_->info(String("Web server started on port 80"));
++    logger.info(String("Web server started on port 80"));
+ 
+     return true;
+ }
+@@ -108,6 +61,9 @@ bool WebServerService::running() const
+ 
+ void WebServerService::registerRoutes()
+ {
++    //
++    // Dashboard
++    //
+     server_.on(
+         "/",
+         HTTP_GET,
+@@ -116,12 +72,9 @@ void WebServerService::registerRoutes()
+             dashboardPage_.handle();
+         });
+ 
+-    server_.onNotFound(
+-        [this]()
+-        {
+-            handleNotFound();
+-        });
+-
++    //
++    // OTA
++    //
+     server_.on(
+         "/ota",
+         HTTP_GET,
+@@ -137,115 +90,147 @@ void WebServerService::registerRoutes()
+         {
+             otaPage_.handleUploadComplete();
+         },
+-    [this]()
+-    {
+-        otaPage_.handleUpload();
+-    });
++        [this]()
++        {
++            otaPage_.handleUpload();
++        });
+ 
++    //
++    // Settings
++    //
+     server_.on(
+-    "/settings",
+-    HTTP_GET,
+-    [this]()
+-    {
+-        settingsPage_.handleLanding();
+-    });
++        "/settings",
++        HTTP_GET,
++        [this]()
++        {
++            settingsPage_.handleLanding();
++        });
+ 
++    //
++    // Alert Settings
++    //
+     server_.on(
+-    "/settings/alerts",
+-    HTTP_GET,
+-    [this]()
+-    {
+-        settingsPage_.handleAlerts();
+-    });
++        "/settings/alerts",
++        HTTP_GET,
++        [this]()
++        {
++            settingsPage_.handleAlerts();
++        });
+ 
+     server_.on(
+-    "/settings/alerts",
+-    HTTP_POST,
+-    [this]()
+-    {
+-        settingsPage_.handleAlertsSave();
+-    });
++        "/settings/alerts",
++        HTTP_POST,
++        [this]()
++        {
++            settingsPage_.handleAlertsSave();
++        });
+ 
++    //
++    // Reporting Settings
++    //
+     server_.on(
+-    "/settings/reporting",
+-    HTTP_GET,
+-    [this]()
+-    {
+-        settingsPage_.handleReporting();
+-    });
++        "/settings/reporting",
++        HTTP_GET,
++        [this]()
++        {
++            settingsPage_.handleReporting();
++        });
+ 
+     server_.on(
+-    "/settings/device",
++        "/settings/reporting",
++        HTTP_POST,
++        [this]()
++        {
++            settingsPage_.handleReportingSave();
++        });
++
++    //
++    // Device Settings
++    //
++    server_.on(
++        "/settings/device",
++        HTTP_GET,
++        [this]()
++        {
++            settingsPage_.handleDevice();
++        });
++
++    server_.on(
++        "/settings/device",
++        HTTP_POST,
++        [this]()
++        {
++            settingsPage_.handleDeviceSave();
++        });
++
++    //
++    // Connectivity Settings
++    //
++    server_.on(
++    "/settings/connectivity",
+     HTTP_GET,
+     [this]()
+     {
+-        settingsPage_.handleDevice();
++        settingsPage_.handleConnectivity();
+     });
+ 
+     server_.on(
+     "/settings/connectivity",
+-    HTTP_GET,
++    HTTP_POST,
+     [this]()
+     {
+-        WebPageBuilder page;
+-
+-        page.begin(
+-            PROJECT_NAME,
+-            "Connectivity Settings",
+-            "Wi-Fi, MQTT, and cellular configuration.");
+-
+-        page.addNavigation("settings");
+-
+-        page.addHealthBanner(
+-            "Connectivity configuration",
+-            "Editable controls will be added later.",
+-            StatusLevel::Neutral);
+-
+-        page.addLink(
+-            "Back to Settings",
+-            "/settings");
++        settingsPage_.handleConnectivitySave();
++    });
+ 
+-        server_.send(
+-            200,
+-            "text/html; charset=utf-8",
+-            page.build());
+-        server_.on(
+-            "/settings/alerts",
+-            HTTP_POST,
+-            [this]()
++    //
++    // 404 handler must be registered last.
++    //
++    server_.onNotFound(
++        [this]()
+         {
+-            settingsPage_.handleAlertsSave();
++            handleNotFound();
+         });
+-    });
+-server_.on(
+-    "/settings/reporting",
+-    HTTP_GET,
+-    [this]()
+-    {
+-        settingsPage_.handleReporting();
+-    });
+-
+-server_.on(
+-    "/settings/reporting",
++    
++    server_.on(
++    "/settings/connectivity/mqtt",
+     HTTP_POST,
+     [this]()
+     {
+-        settingsPage_.handleReportingSave();
+-    });
+-server_.on(
+-    "/settings/device",
++        settingsPage_.handleMqttSave();
++    });   
++    
++    server_.on(
++    "/diagnostics",
+     HTTP_GET,
+     [this]()
+     {
+-        settingsPage_.handleDevice();
++        diagnosticsPage_.handle();
+     });
+-
+-server_.on(
+-    "/settings/device",
++    
++    server_.on(
++    "/restart",
+     HTTP_POST,
+     [this]()
+     {
+-        settingsPage_.handleDeviceSave();
++        server_.send(
++            200,
++            "text/html; charset=utf-8",
++            "<!DOCTYPE html>"
++            "<html>"
++            "<head>"
++            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
++            "<meta http-equiv=\"refresh\" content=\"8;url=/\">"
++            "<title>Restarting</title>"
++            "</head>"
++            "<body>"
++            "<h2>Camper Sentinel is restarting...</h2>"
++            "<p>Please wait while the device reconnects.</p>"
++            "</body>"
++            "</html>");
++
++        delay(500);
++
++        ESP.restart();
+     });
+ }
+ 
+diff --git a/firmware/src/main.cpp b/firmware/src/main.cpp
+index c4b3389..3bd44a3 100644
+--- a/firmware/src/main.cpp
++++ b/firmware/src/main.cpp
+@@ -15,6 +15,7 @@
+ #include "WiFiService.h"
+ #include "WebServerService.h"
+ #include "OTAService.h"
++#include "EventLog.h"
+ 
+ Settings settings;
+ AppState state;
+@@ -47,7 +48,7 @@ void updateTemperature(unsigned long now)
+     {
+         state.temperature.ambientF = reading;
+ 
+-        logger.infof(
++        logger.telemetryf(
+             "Ambient temperature: %.1f F",
+             state.temperature.ambientF);
+     }
+@@ -78,7 +79,7 @@ void updateBattery(unsigned long now)
+ 
+     if (state.power.batteryVoltageValid)
+     {
+-        logger.infof(
++        logger.telemetryf(
+             "Camper battery: %.2f V",
+             state.power.batteryVoltage);
+     }
+@@ -380,7 +381,8 @@ void publishHeartbeat(unsigned long now)
+ }
+ 
+ void setup()
+-{
++{   
++
+     logger.begin(115200, LogLevel::Info);
+     delay(500);
+ 
+@@ -438,13 +440,13 @@ else
+         logger.error("Modem FAILED");
+     }
+ 
+-    if (mqtt.begin())
++    if (mqtt.begin(settings, state))
+     {
+-        logger.info("MQTT OK");
++        logger.info("MQTT service initialized");
+     }
+     else
+     {
+-        logger.warning("MQTT unavailable");
++        logger.warning("MQTT service initialization failed");
+     }
+ }
+ 
+diff --git a/firmware/src/settings.cpp b/firmware/src/settings.cpp
+index efbfc7d..022f901 100644
+--- a/firmware/src/settings.cpp
++++ b/firmware/src/settings.cpp
+@@ -33,18 +33,43 @@ bool Settings::load()
+     const uint16_t storedVersion =
+         preferences_.getUShort("version", 0);
+ 
+-    // New device or incompatible settings version.
+-    if (storedVersion == 0 ||
+-        storedVersion != DeviceSettings::CURRENT_VERSION)
++    //
++    // Brand-new device
++    //
++    if (storedVersion == 0)
+     {
+         data_ = DeviceSettings{};
+ 
+-        data_.wifiSSID = DEFAULT_WIFI_SSID;
+-        data_.wifiPassword = DEFAULT_WIFI_PASSWORD;
++        data_.wifiSSID =
++            DEFAULT_WIFI_SSID;
++
++        data_.wifiPassword =
++            DEFAULT_WIFI_PASSWORD;
++
++        //
++        // Development/default MQTT settings.
++        //
++        data_.mqttHost =
++            MQTT_HOST;
++
++        data_.mqttPort =
++            MQTT_PORT;
++
++        data_.mqttUsername =
++            MQTT_USER;
++
++        data_.mqttPassword =
++            MQTT_PASSWORD;
++
++        data_.mqttEnabled = true;
++        data_.mqttTlsEnabled = true;
+ 
+         return save();
+     }
+ 
++    //
++    // Load settings shared by v1 and v2.
++    //
+     data_.version = storedVersion;
+ 
+     data_.deviceName =
+@@ -62,7 +87,6 @@ bool Settings::load()
+             "wifiEnabled",
+             true);
+ 
+-    // Avoid calling getString() for missing Wi-Fi keys.
+     if (preferences_.isKey("wifiSSID"))
+     {
+         data_.wifiSSID =
+@@ -93,38 +117,134 @@ bool Settings::load()
+     data_.tempAlarmHighF =
+         preferences_.getFloat(
+             "tempHighF",
+-            90.0f);
++            DEFAULT_TEMP_ALARM_HIGH_F);
+ 
+     data_.tempAlarmResetF =
+         preferences_.getFloat(
+             "tempResetF",
+-            85.0f);
++            DEFAULT_TEMP_ALARM_RESET_F);
+ 
+     data_.heartbeatIntervalSeconds =
+         preferences_.getULong(
+             "heartbeatSec",
+-            300);
++            DEFAULT_HEARTBEAT_INTERVAL_SECONDS);
+ 
+     data_.temperaturePublishIntervalSeconds =
+         preferences_.getULong(
+             "tempPubSec",
+-            180);
++            DEFAULT_TEMPERATURE_PUBLISH_SECONDS);
+ 
+     bool needsSave = false;
+ 
+-    // Save Wi-Fi defaults when their keys were missing.
++    //
++    // MQTT settings introduced in version 2.
++    //
++    if (storedVersion < 2)
++    {
++        data_.mqttEnabled = true;
++
++        data_.mqttHost =
++            MQTT_HOST;
++
++        data_.mqttPort =
++            MQTT_PORT;
++
++        data_.mqttUsername =
++            MQTT_USER;
++
++        data_.mqttPassword =
++            MQTT_PASSWORD;
++
++        data_.mqttTlsEnabled = true;
++
++        needsSave = true;
++    }
++    else
++    {
++        data_.mqttEnabled =
++            preferences_.getBool(
++                "mqttEnabled",
++                true);
++
++        if (preferences_.isKey("mqttHost"))
++        {
++            data_.mqttHost =
++                preferences_.getString("mqttHost");
++        }
++        else
++        {
++            data_.mqttHost =
++                MQTT_HOST;
++
++            needsSave = true;
++        }
++
++        data_.mqttPort =
++            preferences_.getUShort(
++                "mqttPort",
++                MQTT_PORT);
++
++        if (preferences_.isKey("mqttUser"))
++        {
++            data_.mqttUsername =
++                preferences_.getString("mqttUser");
++        }
++        else
++        {
++            data_.mqttUsername =
++                MQTT_USER;
++
++            needsSave = true;
++        }
++
++        if (preferences_.isKey("mqttPass"))
++        {
++            data_.mqttPassword =
++                preferences_.getString("mqttPass");
++        }
++        else
++        {
++            data_.mqttPassword =
++                MQTT_PASSWORD;
++
++            needsSave = true;
++        }
++
++        data_.mqttTlsEnabled =
++            preferences_.getBool(
++                "mqttTls",
++                true);
++    }
++
++    //
++    // Missing Wi-Fi keys should also be persisted.
++    //
+     if (!preferences_.isKey("wifiSSID") ||
+         !preferences_.isKey("wifiPass"))
+     {
+         needsSave = true;
+     }
+ 
++    //
+     // Correct invalid values.
++    //
+     if (!validate())
+     {
+         needsSave = true;
+     }
+ 
++    //
++    // Upgrade persisted version.
++    //
++    if (storedVersion !=
++        DeviceSettings::CURRENT_VERSION)
++    {
++        data_.version =
++            DeviceSettings::CURRENT_VERSION;
++
++        needsSave = true;
++    }
++
+     if (needsSave)
+     {
+         return save();
+@@ -157,32 +277,86 @@ bool Settings::save()
+         "hostname",
+         data_.hostname) > 0;
+ 
++    //
++    // Wi-Fi
++    //
+     success &= preferences_.putBool(
+         "wifiEnabled",
+         data_.wifiEnabled) > 0;
+ 
+-if (data_.wifiSSID.isEmpty())
+-{
+-    preferences_.remove("wifiSSID");
+-}
+-else
+-{
+-    success &= preferences_.putString(
+-        "wifiSSID",
+-        data_.wifiSSID) > 0;
+-}
++    if (data_.wifiSSID.isEmpty())
++    {
++        preferences_.remove("wifiSSID");
++    }
++    else
++    {
++        success &= preferences_.putString(
++            "wifiSSID",
++            data_.wifiSSID) > 0;
++    }
+ 
+-if (data_.wifiPassword.isEmpty())
+-{
+-    preferences_.remove("wifiPass");
+-}
+-else
+-{
+-    success &= preferences_.putString(
+-        "wifiPass",
+-        data_.wifiPassword) > 0;
+-}
++    if (data_.wifiPassword.isEmpty())
++    {
++        preferences_.remove("wifiPass");
++    }
++    else
++    {
++        success &= preferences_.putString(
++            "wifiPass",
++            data_.wifiPassword) > 0;
++    }
+ 
++    //
++    // MQTT
++    //
++    success &= preferences_.putBool(
++        "mqttEnabled",
++        data_.mqttEnabled) > 0;
++
++    if (data_.mqttHost.isEmpty())
++    {
++        preferences_.remove("mqttHost");
++    }
++    else
++    {
++        success &= preferences_.putString(
++            "mqttHost",
++            data_.mqttHost) > 0;
++    }
++
++    success &= preferences_.putUShort(
++        "mqttPort",
++        data_.mqttPort) > 0;
++
++    if (data_.mqttUsername.isEmpty())
++    {
++        preferences_.remove("mqttUser");
++    }
++    else
++    {
++        success &= preferences_.putString(
++            "mqttUser",
++            data_.mqttUsername) > 0;
++    }
++
++    if (data_.mqttPassword.isEmpty())
++    {
++        preferences_.remove("mqttPass");
++    }
++    else
++    {
++        success &= preferences_.putString(
++            "mqttPass",
++            data_.mqttPassword) > 0;
++    }
++
++    success &= preferences_.putBool(
++        "mqttTls",
++        data_.mqttTlsEnabled) > 0;
++
++    //
++    // Alerts
++    //
+     success &= preferences_.putBool(
+         "smsEnabled",
+         data_.smsEnabled) > 0;
+@@ -195,6 +369,9 @@ else
+         "tempResetF",
+         data_.tempAlarmResetF) > 0;
+ 
++    //
++    // Reporting
++    //
+     success &= preferences_.putULong(
+         "heartbeatSec",
+         data_.heartbeatIntervalSeconds) > 0;
+@@ -305,6 +482,13 @@ bool Settings::validate()
+         data_.temperaturePublishIntervalSeconds = 180;
+         alreadyValid = false;
+     }
++    if (data_.mqttPort == 0)
++    {
++        data_.mqttPort = 8883;
++        alreadyValid = false;
++    }
+ 
++    data_.mqttHost.trim();
++    data_.mqttUsername.trim();
+     return alreadyValid;
+ }
+\ No newline at end of file

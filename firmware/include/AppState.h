@@ -51,6 +51,7 @@ struct MQTTState
     String transport = "None";
 
     int lastError = 0;
+    int lastTlsError = 0;
 
     uint32_t connectionFailureCount = 0;
     uint32_t lastConnectedTimeSeconds = 0;

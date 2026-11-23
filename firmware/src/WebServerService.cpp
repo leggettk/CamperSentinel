@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <time.h>
 
 
 bool WebServerService::begin(
@@ -114,8 +115,10 @@ void WebServerService::registerRoutes()
             health["mqtt_connected"] = state_->mqtt.connected;
             health["mqtt_transport"] = state_->mqtt.transport;
             health["mqtt_last_error"] = state_->mqtt.lastError;
+            health["mqtt_last_tls_error"] = state_->mqtt.lastTlsError;
         }
         health["uptime_seconds"] = millis() / 1000UL;
+        health["system_time_unix"] = static_cast<int64_t>(time(nullptr));
         health["reset_reason"] = static_cast<int>(esp_reset_reason());
         health["bluetooth_status"] = renogyBatteries.status();
         char payload[1024];

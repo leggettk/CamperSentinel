@@ -165,6 +165,10 @@ void DiagnosticsPage::handle()
         String(state.mqtt.lastError));
 
     page.addValue(
+        "Last TLS Error (2=TCP/DNS, 3=handshake, 7=memory)",
+        String(state.mqtt.lastTlsError));
+
+    page.addValue(
         "Connection Failures",
         String(state.mqtt.connectionFailureCount));
 

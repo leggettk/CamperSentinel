@@ -4,6 +4,8 @@
 #include <SSLClient.h>
 #include <TinyGsmClient.h>
 #include <WiFi.h>
+#include <time.h>
+#include <sys/time.h>
 #include "Secrets.h"
 #include "Logger.h"
 #include "Modem.h"
@@ -53,7 +55,11 @@ public:
     int connect(const char* host, uint16_t port) override
     {
         clearWriteError();
-        return SSLClient::connect(host, port);
+        const int result = SSLClient::connect(host, port);
+        // SSLClient can close its handshake engine without setting a Print
+        // error. TCP connection failures already set SSL_CLIENT_CONNECT_FAIL.
+        if (result != 1 && !getWriteError()) setWriteError(SSL_BR_CONNECT_FAIL);
+        return result;
     }
 };
 MqttTlsClient tlsClient(
@@ -70,6 +76,61 @@ MQTT mqtt;
 
 namespace
 {
+// Require a clock at least as recent as this firmware's build day. Never
+// silently fall back to SSLClient's cached library compilation timestamp.
+time_t minimumTlsTime()
+{
+    static const time_t minimum = []() {
+        struct tm date = {};
+        strptime(__DATE__, "%b %d %Y", &date);
+        return mktime(&date); // configTime below sets the system timezone to UTC.
+    }();
+    return minimum;
+}
+
+bool prepareTlsTime()
+{
+    time_t now = time(nullptr);
+    if (now < minimumTlsTime() && cellular.isNetworkConnected())
+    {
+        int year, month, day, hour, minute, second;
+        float zone;
+        if (gsm.getNetworkTime(&year, &month, &day, &hour, &minute, &second, &zone) &&
+            year >= 2026 && year <= 2099 && month >= 1 && month <= 12 &&
+            day >= 1 && day <= 31 && hour >= 0 && hour <= 23 &&
+            minute >= 0 && minute <= 59 && second >= 0 && second <= 59 &&
+            zone >= -12 && zone <= 14)
+        {
+            struct tm date = {};
+            date.tm_year = year - 1900;
+            date.tm_mon = month - 1;
+            date.tm_mday = day;
+            date.tm_hour = hour;
+            date.tm_min = minute;
+            date.tm_sec = second;
+            const time_t utc = mktime(&date) - static_cast<long>(zone * 3600);
+            if (utc >= minimumTlsTime())
+            {
+                struct timeval clock = {utc, 0};
+                settimeofday(&clock, nullptr);
+                now = time(nullptr);
+                logger.info("System clock synchronized from cellular network");
+            }
+        }
+    }
+    if (now < minimumTlsTime())
+    {
+        logger.warning("MQTT TLS deferred: waiting for current time from WiFi NTP or cellular network");
+        return false;
+    }
+    constexpr uint32_t SECONDS_PER_DAY = 86400;
+    constexpr uint32_t DAYS_BEFORE_UNIX_EPOCH = 719528;
+    tlsClient.setVerificationTime(now / SECONDS_PER_DAY + DAYS_BEFORE_UNIX_EPOCH,
+                                  now % SECONDS_PER_DAY);
+    logger.infof("MQTT TLS validation time: %lu (UTC Unix seconds)", static_cast<unsigned long>(now));
+    return true;
+}
+
 constexpr char STATUS_TOPIC[] =
     "rvmonitor/camper01/status";
 
@@ -107,6 +168,8 @@ bool MQTT::begin(
 {
     settings_ = &settings;
     state_ = &state;
+    // SNTP runs asynchronously and retries as WiFi becomes available.
+    configTime(0, 0, "pool.ntp.org", "time.cloudflare.com", "time.google.com");
 
     const DeviceSettings& config =
         settings_->get();
@@ -183,6 +246,12 @@ bool MQTT::connect()
         return false;
     }
 
+    if (config.mqttTlsEnabled && !prepareTlsTime())
+    {
+        if (state_) state_->mqtt.connected = false;
+        return false;
+    }
+
     tlsClient.stop();
     wifiClient.stop();
     cellularClient.stop();
@@ -218,16 +287,19 @@ bool MQTT::connect()
     {
         const int mqttState =
         mqttClient.state();
+        // Capture before stop() changes the TLS engine state. Zero for plain TCP.
+        const int tlsError = config.mqttTlsEnabled ? tlsClient.getWriteError() : 0;
 
         if (state_ != nullptr)
         {
         state_->mqtt.connected = false;
         state_->mqtt.lastError = mqttState;
+        state_->mqtt.lastTlsError = tlsError;
         state_->mqtt.connectionFailureCount++;
         }
         logger.errorf(
-            "MQTT connection failed, state=%d",
-            mqttClient.state());
+            "MQTT connection failed, state=%d, TLS error=%d (2=TCP/DNS connect, 3=TLS handshake, 7=out of memory)",
+            mqttState, tlsError);
 
         tlsClient.stop();
         transport->stop();
@@ -265,6 +337,7 @@ bool MQTT::connect()
     {
     state_->mqtt.connected = true;
     state_->mqtt.lastError = 0;
+    state_->mqtt.lastTlsError = 0;
 
     state_->mqtt.lastConnectedTimeSeconds =
         millis() / 1000UL;
