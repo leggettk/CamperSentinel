@@ -15,6 +15,7 @@ public:
     bool publishShorePower(bool present);
     bool publishHeartbeat(const AppState &state);
     bool publishLithiumBatteries(const AppState& state);
+    bool publishSmartShunt(const AppState& state);
 
 private:
     AppState* state_ = nullptr;
@@ -34,6 +35,7 @@ private:
     bool publishShorePowerDiscovery();
     bool publishSignalDiscovery();
     bool publishUptimeDiscovery();
+    bool smartShuntDiscoveryPublished_ = false;
     
 
     static constexpr unsigned long RECONNECT_INTERVAL_MS = 30000UL;

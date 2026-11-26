@@ -332,6 +332,7 @@ bool MQTT::connect()
         config.mqttTlsEnabled ? "TLS" : "plain TCP");
     if (usingWifi) { wifiFailures_ = 0; wifiCoolingDown_ = false; wifi.noteNetworkSuccess(); }
     lithiumDiscoveryPublished_ = false;
+    smartShuntDiscoveryPublished_ = false;
     
     if (state_ != nullptr)
     {
@@ -946,3 +947,214 @@ bool MQTT::publishLithiumBatteries(const AppState& state)
     }
     return success;
 }
+
+bool MQTT::publishSmartShunt(const AppState& state)
+{
+    if (!mqttClient.connected())
+    {
+        return false;
+    }
+
+    const auto& shunt = state.power.smartShunt;
+
+    const bool valid =
+        shunt.valid &&
+        (millis() - shunt.updatedMs < 5000UL);
+
+    constexpr char STATE_TOPIC[] =
+        "rvmonitor/camper01/smartshunt/state";
+
+    constexpr char AVAILABILITY_TOPIC[] =
+        "rvmonitor/camper01/smartshunt/availability";
+
+    bool success = true;
+
+    // Build SmartShunt telemetry.
+    JsonDocument telemetry;
+
+    telemetry["valid"] = valid;
+
+    if (valid)
+    {
+        telemetry["voltage"] = shunt.voltage;
+        telemetry["current"] = shunt.current;
+        telemetry["soc"] = shunt.soc;
+        telemetry["power"] = shunt.power;
+
+        telemetry["reading_age_seconds"] =
+            (millis() - shunt.updatedMs) / 1000UL;
+    }
+
+    char payload[768];
+
+    size_t length =
+        serializeJson(telemetry, payload, sizeof(payload));
+
+    // Mark invalid readings unavailable before publishing.
+    if (!valid)
+    {
+        success &= mqttClient.publish(
+            AVAILABILITY_TOPIC,
+            "offline",
+            true);
+    }
+
+    const bool telemetryPublished =
+        length > 0 &&
+        length < sizeof(payload) &&
+        mqttClient.publish(
+            STATE_TOPIC,
+            payload,
+            true);
+
+    success &= telemetryPublished;
+
+    // Only mark measurements available after a successful publish.
+    if (valid)
+    {
+        success &= mqttClient.publish(
+            AVAILABILITY_TOPIC,
+            telemetryPublished ? "online" : "offline",
+            true);
+    }
+
+    // Publish Home Assistant discovery.
+    if (!smartShuntDiscoveryPublished_)
+    {
+        const char* fields[] = {
+            "voltage",
+            "current",
+            "soc",
+            "power"
+        };
+
+        const char* names[] = {
+            "SmartShunt Voltage",
+            "SmartShunt Current",
+            "SmartShunt State of Charge",
+            "SmartShunt Power"
+        };
+
+        const char* classes[] = {
+            "voltage",
+            "current",
+            "battery",
+            "power"
+        };
+
+        const char* units[] = {
+            "V",
+            "A",
+            "%",
+            "W"
+        };
+
+        const int precision[] = {
+            3, 2, 1, 0
+        };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            JsonDocument config;
+
+            String unique =
+                "camper01_smartshunt_" +
+                String(fields[i]);
+
+            config["name"] = names[i];
+            config["unique_id"] = unique;
+            config["state_topic"] = STATE_TOPIC;
+
+            config["value_template"] =
+                "{{ value_json." +
+                String(fields[i]) +
+                " | default(none) }}";
+
+            config["device_class"] = classes[i];
+            config["unit_of_measurement"] = units[i];
+            config["state_class"] = "measurement";
+            config["suggested_display_precision"] =
+                precision[i];
+
+            config["expire_after"] = 90;
+
+            JsonArray availability =
+                config["availability"].to<JsonArray>();
+
+            availability.add<JsonObject>()["topic"] =
+                STATUS_TOPIC;
+
+            availability.add<JsonObject>()["topic"] =
+                AVAILABILITY_TOPIC;
+
+            config["availability_mode"] = "all";
+
+            config["device"]["identifiers"][0] =
+                "camper_monitor_01";
+
+            config["device"]["name"] =
+                "Camper Monitor";
+
+            length = serializeJson(
+                config,
+                payload,
+                sizeof(payload));
+
+            success &= length > 0 &&
+                length < sizeof(payload) &&
+                mqttClient.publish(
+                    ("homeassistant/sensor/" +
+                     unique + "/config").c_str(),
+                    payload,
+                    true);
+        }
+
+        // SmartShunt connection binary sensor.
+        JsonDocument config;
+
+        config["name"] = "SmartShunt Connection";
+        config["unique_id"] =
+            "camper01_smartshunt_connection";
+
+        config["state_topic"] = AVAILABILITY_TOPIC;
+        config["payload_on"] = "online";
+        config["payload_off"] = "offline";
+        config["device_class"] = "connectivity";
+
+        config["availability_topic"] = STATUS_TOPIC;
+        config["payload_available"] = "online";
+        config["payload_not_available"] = "offline";
+
+        config["expire_after"] = 90;
+
+        config["device"]["identifiers"][0] =
+            "camper_monitor_01";
+
+        config["device"]["name"] =
+            "Camper Monitor";
+
+        length = serializeJson(
+            config,
+            payload,
+            sizeof(payload));
+
+        success &= length > 0 &&
+            length < sizeof(payload) &&
+            mqttClient.publish(
+                "homeassistant/binary_sensor/"
+                "camper01_smartshunt_connection/config",
+                payload,
+                true);
+
+        if (success)
+        {
+            smartShuntDiscoveryPublished_ = true;
+
+            logger.info(
+                "Published SmartShunt MQTT discovery");
+        }
+    }
+
+    return success;
+}
+

@@ -523,6 +523,58 @@ if (vedirect.hasNewData() && vedirect.isValid())
         lastLithiumPublish = now;
         mqtt.publishLithiumBatteries(state);
     }
+
+    // SmartShunt MQTT telemetry
+    static unsigned long lastSmartShuntPublish = 0;
+    static unsigned long lastSmartShuntAttempt = 0;
+    static bool smartShuntPublished = false;
+    static bool lastSmartShuntValid = false;
+    static bool smartShuntRetryPending = false;
+
+    const unsigned long shuntNow = millis();
+
+    const bool smartShuntValid =
+        state.power.smartShunt.valid &&
+        (shuntNow - state.power.smartShunt.updatedMs < 5000UL);
+
+    if (mqtt.isConnected())
+    {
+        const bool statusChanged =
+            smartShuntValid != lastSmartShuntValid;
+
+        const bool publishDue =
+            !smartShuntPublished ||
+            statusChanged ||
+            smartShuntRetryPending ||
+            shuntNow - lastSmartShuntPublish >= 30000UL;
+
+        const bool retryAllowed =
+            !smartShuntRetryPending ||
+            shuntNow - lastSmartShuntAttempt >= 5000UL;
+
+        if (publishDue && retryAllowed)
+        {
+            lastSmartShuntAttempt = shuntNow;
+
+            if (mqtt.publishSmartShunt(state))
+            {
+                lastSmartShuntPublish = shuntNow;
+                lastSmartShuntValid = smartShuntValid;
+                smartShuntPublished = true;
+                smartShuntRetryPending = false;
+            }
+            else
+            {
+                smartShuntRetryPending = true;
+            }
+        }
+    }
+    else
+    {
+        smartShuntPublished = false;
+        smartShuntRetryPending = false;
+    }
+
     webServerService.update();
     handleButton();
     updateTemperature(now);
